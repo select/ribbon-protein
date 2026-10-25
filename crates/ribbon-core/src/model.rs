@@ -61,7 +61,7 @@ pub enum StrokeDirection {
     Travel,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RenderOptions {
     pub paper: Paper,

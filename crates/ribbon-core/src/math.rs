@@ -179,6 +179,7 @@ impl Pchip {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct Camera {
     pub(crate) center: V3,
     pub(crate) basis: [V3; 3],
@@ -243,7 +244,15 @@ impl Camera {
         };
         let x = axis(order[1]);
         let y = axis(order[0]);
-        let mut basis = [x, y, cross(x, y)];
+        Self {
+            center,
+            basis: [x, y, cross(x, y)],
+        }
+        .rotated(angles)
+    }
+    pub(crate) fn rotated(&self, angles: V3) -> Self {
+        let center = self.center;
+        let mut basis = self.basis;
         // Extrinsic xyz Euler rotation, Rz * Ry * Rx as in scipy Rotation.
         for (axis, angle) in angles.into_iter().enumerate() {
             let (s, c) = angle.to_radians().sin_cos();

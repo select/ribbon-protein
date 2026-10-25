@@ -69,6 +69,126 @@ fn paths(svg: &str) -> Vec<Vec<[f64; 2]>> {
 }
 
 #[test]
+fn stateful_cache_matches_stateless_for_every_option_and_selection_key() {
+    let mut req = request();
+    req.options.samples = 4;
+    let mut session = RenderSession::new(req.structure.clone()).unwrap();
+    let variants: Vec<Mutation<RenderOptions>> = vec![
+        Box::new(|_| {}),
+        Box::new(|o| o.rotation = [33.0, -29.0, 81.0]),
+        Box::new(|o| o.lines = 0),
+        Box::new(|o| o.lines = 20),
+        Box::new(|o| o.samples = 8),
+        Box::new(|o| o.selected_chains.clear()),
+        Box::new(|o| o.selected_chains = vec!["auth-A".into()]),
+        Box::new(|o| o.selected_chains = vec!["long_chain_B".into()]),
+        Box::new(|o| o.selected_chains.reverse()),
+        Box::new(|o| {
+            o.paper = Paper::Bierdeckel;
+            o.width_mm = 93.14;
+            o.height_mm = 93.14;
+            o.margin_mm = 5.0;
+        }),
+        Box::new(|o| {
+            o.paper = Paper::Custom;
+            o.width_mm = 140.0;
+            o.height_mm = 100.0;
+            o.landscape = true;
+        }),
+        Box::new(|o| o.margin_mm = 0.0),
+        Box::new(|o| o.pen_width_mm = 2.0),
+        Box::new(|o| o.fill_loops = false),
+        Box::new(|o| o.loop_spacing_mm = 0.3),
+        Box::new(|o| o.border_passes = 1),
+        Box::new(|o| o.border_spacing_mm = 0.2),
+        Box::new(|o| o.stroke_direction = StrokeDirection::Travel),
+    ];
+    let base = req.options.clone();
+    for mutate in variants {
+        req.options = base.clone();
+        mutate(&mut req.options);
+        let expected = serde_json::to_value(render(&req).unwrap()).unwrap();
+        let (actual, _) = session.calculate(req.options.clone(), false).unwrap();
+        assert_eq!(serde_json::to_value(actual).unwrap(), expected);
+        // Repeat via joined cache, then group split/merge colors. Direction and
+        // order must match stateless even when several segments share a color.
+        for colors in [
+            vec![],
+            vec!["red", "black"],
+            vec!["red", "red"],
+            vec!["#123aBC", "red"],
+        ] {
+            req.options.chain_colors = req
+                .structure
+                .chains
+                .iter()
+                .zip(colors)
+                .map(|(c, color)| (c.id.clone(), color.into()))
+                .collect();
+            let (actual, timing) = session.calculate(req.options.clone(), false).unwrap();
+            assert!(timing.path_cache_hit);
+            assert_eq!(
+                serde_json::to_value(actual).unwrap(),
+                serde_json::to_value(render(&req).unwrap()).unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn prepared_cache_is_bounded_and_preview_never_poisoned_the_final_paths() {
+    let mut req = request();
+    req.options.samples = 2;
+    let mut session = RenderSession::new(req.structure.clone()).unwrap();
+    let (_, first) = session.calculate(req.options.clone(), false).unwrap();
+    assert!(!first.geometry_cache_hit && !first.path_cache_hit);
+    req.options.rotation[0] = 20.0;
+    let (preview, timing) = session.calculate(req.options.clone(), true).unwrap();
+    assert!(timing.geometry_cache_hit && !timing.path_cache_hit);
+    assert_eq!(timing.clip_ms, 0.0);
+    assert!(preview.svg.contains("Hidden strokes are NOT removed"));
+    let (exact, timing) = session.calculate(req.options.clone(), false).unwrap();
+    assert!(timing.geometry_cache_hit && !timing.path_cache_hit);
+    assert_ne!(preview.svg, exact.svg);
+    assert_eq!(exact.svg, render(&req).unwrap().svg);
+    for samples in [3, 4, 2] {
+        req.options.samples = samples;
+        let (_, timing) = session.calculate(req.options.clone(), false).unwrap();
+        assert!(!timing.geometry_cache_hit); // 2 has been evicted by 3 + 4.
+    }
+    // Same chain IDs, samples and options, DIFFERENT coordinates and labels.
+    let mut other = req.clone();
+    other.structure.segments[0].residues[2].ca[0] += 0.25;
+    other.structure.segments[0].residues[2].kind = SecondaryStructure::C;
+    let mut replacement = RenderSession::new(other.structure.clone()).unwrap();
+    let (result, timing) = replacement.calculate(other.options.clone(), false).unwrap();
+    assert!(!timing.geometry_cache_hit && !timing.path_cache_hit);
+    assert_eq!(result.svg, render(&other).unwrap().svg);
+    assert_ne!(result.svg, render(&req).unwrap().svg);
+}
+
+#[test]
+fn session_json_validates_options_on_cache_hits_and_recovers_from_errors() {
+    let req = request();
+    let mut session =
+        RenderSession::from_json(&serde_json::to_string(&req.structure).unwrap()).unwrap();
+    let options = serde_json::to_string(&req.options).unwrap();
+    let first: Value =
+        serde_json::from_str(&session.render_options_json(&options, false).unwrap()).unwrap();
+    assert!(session.render_options_json("{}", false).is_err());
+    let mut invalid = req.options.clone();
+    invalid.pen_width_mm = 0.0;
+    assert!(session
+        .render_options_json(&serde_json::to_string(&invalid).unwrap(), false)
+        .is_err());
+    let next: Value =
+        serde_json::from_str(&session.render_options_json(&options, false).unwrap()).unwrap();
+    assert_eq!(first["result"], next["result"]);
+    assert_eq!(next["timings"]["pathCacheHit"], true);
+    assert!(RenderSession::from_json("{}").is_err());
+}
+
+#[test]
 fn actual_render_is_finite_line_only_svg_with_physical_statistics() {
     let r = render(&request()).unwrap();
     assert!(r.stroke_count > 5 && r.length_mm > 100.0);

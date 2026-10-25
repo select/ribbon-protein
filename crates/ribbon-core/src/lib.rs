@@ -1,8 +1,8 @@
 //! A local, pure-Rust protein ribbon renderer, shared by native tests and WASM.
 //!
 //! The parser owns secondary-structure assignment and backbone segmentation.
-//! This engine consumes normalized coordinates only. It never accesses files,
-//! the network, native clocks, or browser state.
+//! This engine consumes normalized coordinates only; no files or network.
+//! Optional session stage timings use a monotonic clock, never geometry inputs.
 mod clip;
 mod math;
 mod model;
@@ -36,48 +36,188 @@ pub fn render_json_native(request: &str) -> Result<String, RenderError> {
         .map_err(|e| RenderError(format!("Cannot encode render result: {e}")))
 }
 
-/// Native pure rendering entry point. All geometry is computed as finite f64;
-/// options are strictly validated before any spline or track allocations.
+/// Native stateless oracle. The session uses the very same f64 pipeline, but
+/// retains prepared geometry and the last view's per-segment joined paths.
 pub fn render(request: &RenderRequest) -> Result<RenderResult, RenderError> {
     request.validate()?;
-    let o = &request.options;
-    let selected: HashSet<&str> = o.selected_chains.iter().map(String::as_str).collect();
-    let segments: Vec<_> = request
+    let prepared = prepare(request);
+    let (joined, _) = draw(request, &prepared, false)?;
+    finish(request, &joined)
+}
+
+struct Prepared {
+    samples: usize,
+    indices: Vec<usize>,
+    ribbons: Vec<Vec<ribbon::Sample>>,
+    camera: math::Camera,
+    residue_count: usize,
+    warnings: Vec<String>,
+}
+struct Joined {
+    paths: Vec<Vec<paths::Path>>,
+    indices: Vec<usize>,
+    residue_count: usize,
+    warnings: Vec<String>,
+}
+
+fn selected_indices(request: &RenderRequest) -> Vec<usize> {
+    let selected: HashSet<&str> = request
+        .options
+        .selected_chains
+        .iter()
+        .map(String::as_str)
+        .collect();
+    request
         .structure
         .segments
         .iter()
-        .filter(|s| selected.contains(s.chain_id.as_str()))
-        .collect();
+        .enumerate()
+        .filter(|(_, s)| selected.contains(s.chain_id.as_str()))
+        .map(|(i, _)| i)
+        .collect()
+}
+fn prepare(request: &RenderRequest) -> Prepared {
+    let indices = selected_indices(request);
     let mut warnings = request.structure.warnings.clone();
-    if selected.is_empty() {
-        warnings.push("No chains selected; the drawing is empty.".into());
-        return make_result(request, BTreeMap::new(), 0, warnings);
-    }
-    if segments.is_empty() {
-        return model::fail(
-            "Selected chains have no continuous backbone segments with at least four residues",
-        );
-    }
-    let residue_count = segments.iter().map(|s| s.residues.len()).sum();
-    let mut ribbons = Vec::with_capacity(segments.len());
     let mut fallback_used = false;
-    for segment in &segments {
-        let (samples, fallback) = ribbon::make_ribbon(segment, o.samples);
-        ribbons.push(samples);
-        fallback_used |= fallback;
-    }
+    let mut residue_count = 0;
+    let ribbons: Vec<_> = indices
+        .iter()
+        .map(|&i| {
+            let segment = &request.structure.segments[i];
+            residue_count += segment.residues.len();
+            let (samples, fallback) = ribbon::make_ribbon(segment, request.options.samples);
+            fallback_used |= fallback;
+            samples
+        })
+        .collect();
     if fallback_used {
         warnings.push("Some carbonyl directions are parallel to the backbone; stable transported fallback frames were used.".into());
     }
     let all_points: Vec<_> = ribbons.iter().flatten().map(|s| s.point).collect();
-    let camera = math::Camera::new(&all_points, o.rotation);
-    let mut sections: Vec<_> = ribbons
+    let camera = math::Camera::new(&all_points, [0.0; 3]);
+    Prepared {
+        samples: request.options.samples,
+        indices,
+        ribbons,
+        camera,
+        residue_count,
+        warnings,
+    }
+}
+
+#[derive(Default, Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageTimings {
+    pub prepare_ms: f64,
+    pub project_ms: f64,
+    pub clip_ms: f64,
+    pub paths_ms: f64,
+    pub finish_ms: f64,
+    pub geometry_cache_hit: bool,
+    pub path_cache_hit: bool,
+}
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(inline_js = "export function ribbon_now() { return performance.now(); }")]
+extern "C" {
+    fn ribbon_now() -> f64;
+}
+fn now() -> f64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        ribbon_now()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::sync::OnceLock;
+        use std::time::Instant;
+        static START: OnceLock<Instant> = OnceLock::new();
+        START.get_or_init(Instant::now).elapsed().as_secs_f64() * 1000.0
+    }
+}
+
+fn draw(
+    request: &RenderRequest,
+    prepared: &Prepared,
+    preview: bool,
+) -> Result<(Joined, StageTimings), RenderError> {
+    let o = &request.options;
+    let mut timings = StageTimings::default();
+    let mut warnings = prepared.warnings.clone();
+    let empty = || Joined {
+        paths: vec![],
+        indices: vec![],
+        residue_count: 0,
+        warnings: vec![],
+    };
+    if o.selected_chains.is_empty() {
+        warnings.push("No chains selected; the drawing is empty.".into());
+        return Ok((
+            Joined {
+                warnings,
+                ..empty()
+            },
+            timings,
+        ));
+    }
+    if prepared.indices.is_empty() {
+        return model::fail(
+            "Selected chains have no continuous backbone segments with at least four residues",
+        );
+    }
+    let started = now();
+    let camera = prepared.camera.rotated(o.rotation);
+    // Preview keeps the exact full-sample PCA convention, but projects a bounded
+    // subset of the actual 3D ribbon. It never enters clipping or path ordering.
+    let stride = if preview {
+        prepared
+            .ribbons
+            .iter()
+            .map(Vec::len)
+            .sum::<usize>()
+            .div_ceil(4000)
+            .max(1)
+    } else {
+        1
+    };
+    let mut sections: Vec<_> = prepared
+        .ribbons
         .iter()
-        .map(|s| ribbon::project_ribbon(s, &camera))
+        .map(|samples| {
+            if stride == 1 {
+                ribbon::project_ribbon(samples, &camera)
+            } else {
+                let mut sparse: Vec<_> = samples.iter().step_by(stride).cloned().collect();
+                if (samples.len() - 1) % stride != 0 {
+                    sparse.push(samples.last().unwrap().clone());
+                }
+                ribbon::project_ribbon(&sparse, &camera)
+            }
+        })
         .collect();
-    drop(ribbons);
-    drop(all_points);
     fit_page(&mut sections, o)?;
+    timings.project_ms = now() - started;
+    if preview {
+        warnings.push("Interaction preview: ribbon outlines only, without hidden-line removal. Refine before exporting.".into());
+        let paths = sections
+            .iter()
+            .map(|s| {
+                vec![
+                    s.iter().map(|v| v.left).collect(),
+                    s.iter().map(|v| v.right).collect(),
+                ]
+            })
+            .collect();
+        return Ok((
+            Joined {
+                paths,
+                indices: prepared.indices.clone(),
+                residue_count: prepared.residue_count,
+                warnings,
+            },
+            timings,
+        ));
+    }
     let tracks = ribbon::track_count(&sections, o)?;
     if o.fill_loops && o.pen_width_mm > o.loop_spacing_mm {
         warnings
@@ -89,6 +229,7 @@ pub fn render(request: &RenderRequest) -> Result<RenderResult, RenderError> {
         );
     }
     warnings.push("Hidden-line removal uses average panel depth; intersecting or strongly twisted surfaces may have local visibility approximations.".into());
+    let started = now();
     let mut panels = Vec::with_capacity(sections.iter().map(|s| s.len() - 1).sum());
     for (segment, sections) in sections.into_iter().enumerate() {
         for (step, pair) in sections.windows(2).enumerate() {
@@ -100,32 +241,178 @@ pub fn render(request: &RenderRequest) -> Result<RenderResult, RenderError> {
             });
         }
     }
-    let visible = clip::visible_edges(&mut panels, segments.len(), tracks, o)?;
-    drop(panels);
-    let mut path_budget = paths::Budget::default();
+    let visible = clip::visible_edges(&mut panels, prepared.indices.len(), tracks, o)?;
+    timings.clip_ms = now() - started;
+    let started = now();
+    let mut budget = paths::Budget::default();
     let directed = o.stroke_direction == StrokeDirection::Backbone;
+    let paths = visible
+        .into_iter()
+        .map(|edges| paths::merge(&edges, directed, &mut budget))
+        .collect::<Result<_, _>>()?;
+    timings.paths_ms = now() - started;
+    Ok((
+        Joined {
+            paths,
+            indices: prepared.indices.clone(),
+            residue_count: prepared.residue_count,
+            warnings,
+        },
+        timings,
+    ))
+}
+fn finish(request: &RenderRequest, joined: &Joined) -> Result<RenderResult, RenderError> {
+    let o = &request.options;
     let mut colors: BTreeMap<String, Vec<paths::Path>> = BTreeMap::new();
-    for (i, edges) in visible.into_iter().enumerate() {
-        // Always keep segments separate while joining, including separate
-        // segments with identical chain IDs and colors. A physical gap is not
-        // an invitation to draw an extra chord.
-        let paths = paths::merge(&edges, directed, &mut path_budget)?;
+    // Joining remains per segment, NOT per color. Rebuild color groups and
+    // rerun ordering: a color change can merge/split groups and change travel.
+    for (&index, paths) in joined.indices.iter().zip(&joined.paths) {
         let color = o
             .chain_colors
-            .get(&segments[i].chain_id)
+            .get(&request.structure.segments[index].chain_id)
             .map(String::as_str)
             .unwrap_or("black");
-        colors.entry(color.to_owned()).or_default().extend(paths);
+        colors
+            .entry(color.to_owned())
+            .or_default()
+            .extend(paths.iter().cloned());
     }
     for paths in colors.values_mut() {
-        *paths = paths::order(std::mem::take(paths), !directed);
+        *paths = paths::order(
+            std::mem::take(paths),
+            o.stroke_direction != StrokeDirection::Backbone,
+        );
     }
-    if colors.values().all(Vec::is_empty) {
+    let mut warnings = joined.warnings.clone();
+    if !joined.indices.is_empty() && colors.values().all(Vec::is_empty) {
         warnings.push(
             "No strokes survived visibility clipping and the 0.08 mm minimum stroke length.".into(),
         );
     }
-    make_result(request, colors, residue_count, warnings)
+    make_result(request, colors, joined.residue_count, warnings)
+}
+
+/// Owns exactly one structure. Replacement drops every structure-dependent cache.
+/// At most two prepared sample/selection variants and one joined view are kept.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub struct RenderSession {
+    request: RenderRequest,
+    prepared: std::collections::VecDeque<Prepared>,
+    joined: Option<(RenderOptions, Joined)>,
+}
+impl RenderSession {
+    pub fn new(structure: StructureData) -> Result<Self, RenderError> {
+        let request = RenderRequest {
+            structure,
+            options: RenderOptions::default(),
+        };
+        request.validate()?;
+        Ok(Self {
+            request,
+            prepared: Default::default(),
+            joined: None,
+        })
+    }
+    pub fn calculate(
+        &mut self,
+        options: RenderOptions,
+        preview: bool,
+    ) -> Result<(RenderResult, StageTimings), RenderError> {
+        self.request.options = options;
+        self.request.validate()?;
+        let mut key = self.request.options.clone();
+        key.chain_colors.clear();
+        // The joined cache is independent only of colors; pen width affects fit.
+        let hit = !preview && self.joined.as_ref().is_some_and(|(k, _)| *k == key);
+        let mut timings = StageTimings {
+            path_cache_hit: hit,
+            ..Default::default()
+        };
+        if !hit {
+            let started = now();
+            let indices = selected_indices(&self.request);
+            let index = self
+                .prepared
+                .iter()
+                .position(|p| p.samples == key.samples && p.indices == indices);
+            let geometry_hit = index.is_some();
+            if let Some(index) = index {
+                let prepared = self.prepared.remove(index).unwrap();
+                self.prepared.push_front(prepared);
+            } else {
+                if self.prepared.len() == 2 {
+                    self.prepared.pop_back();
+                }
+                self.prepared.push_front(prepare(&self.request));
+            }
+            let prepare_ms = now() - started;
+            let (joined, stages) = draw(&self.request, &self.prepared[0], preview)?;
+            timings = StageTimings {
+                prepare_ms,
+                geometry_cache_hit: geometry_hit,
+                ..stages
+            };
+            if preview {
+                let started = now();
+                // No plotter ordering in interaction preview.
+                let mut colors = BTreeMap::new();
+                for (&index, paths) in joined.indices.iter().zip(&joined.paths) {
+                    let color = self
+                        .request
+                        .options
+                        .chain_colors
+                        .get(&self.request.structure.segments[index].chain_id)
+                        .cloned()
+                        .unwrap_or_else(|| "black".into());
+                    colors
+                        .entry(color)
+                        .or_insert_with(Vec::new)
+                        .extend(paths.iter().cloned());
+                }
+                let mut result =
+                    make_result(&self.request, colors, joined.residue_count, joined.warnings)?;
+                result.svg = result.svg.replace(
+                    "Visible vector centerlines only. Hidden strokes geometrically removed.",
+                    "Approximate interaction preview. Hidden strokes are NOT removed.",
+                );
+                timings.finish_ms = now() - started;
+                return Ok((result, timings));
+            }
+            self.joined = Some((key, joined));
+        }
+        let started = now();
+        let result = finish(&self.request, &self.joined.as_ref().unwrap().1)?;
+        timings.finish_ms = now() - started;
+        Ok((result, timings))
+    }
+}
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+impl RenderSession {
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(constructor))]
+    pub fn from_json(structure: &str) -> Result<RenderSession, String> {
+        if structure.len() > model::MAX_JSON_BYTES {
+            return Err("Structure exceeds 32 MiB".into());
+        }
+        let structure =
+            serde_json::from_str(structure).map_err(|e| format!("Invalid structure JSON: {e}"))?;
+        Self::new(structure).map_err(|e| e.to_string())
+    }
+    pub fn render_options_json(&mut self, options: &str, preview: bool) -> Result<String, String> {
+        if options.len() > 1024 * 1024 {
+            return Err("Options exceed 1 MiB".into());
+        }
+        let options =
+            serde_json::from_str(options).map_err(|e| format!("Invalid options JSON: {e}"))?;
+        let (result, timings) = self
+            .calculate(options, preview)
+            .map_err(|e| e.to_string())?;
+        #[derive(serde::Serialize)]
+        struct Output {
+            result: RenderResult,
+            timings: StageTimings,
+        }
+        serde_json::to_string(&Output { result, timings }).map_err(|e| e.to_string())
+    }
 }
 
 /// Final dimensions are already resolved by the UI. Never inspect paper or
