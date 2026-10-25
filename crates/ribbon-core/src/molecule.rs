@@ -1,8 +1,18 @@
-//! Molecular wire geometry. Zero-width sections reuse the ribbon clipping
-//! pipeline: bonds can be hidden by ribbons, but never act as opaque surfaces.
-use crate::{math::Camera, ribbon::Section, Molecule};
+//! Artistic bond bands with independent interior tracks. Their silhouettes
+//! participate in the same approximate hidden-line removal as protein ribbons.
+use crate::{
+    math::{lerp, Camera},
+    ribbon::Section,
+    Molecule,
+};
 
-pub(crate) fn project(molecule: &Molecule, camera: &Camera) -> Vec<Vec<Section>> {
+pub(crate) fn profile(section: &Section, lines: usize) -> Vec<[f64; 2]> {
+    (0..lines + 2)
+        .map(|i| lerp(section.left, section.right, i as f64 / (lines + 1) as f64))
+        .collect()
+}
+
+pub(crate) fn project(molecule: &Molecule, camera: &Camera, width: f64) -> Vec<Vec<Section>> {
     let points: Vec<_> = molecule.atoms.iter().map(|&p| camera.point(p)).collect();
     let section = |p: [f64; 3]| Section {
         left: [p[0], -p[1]],
@@ -15,7 +25,36 @@ pub(crate) fn project(molecule: &Molecule, camera: &Camera) -> Vec<Vec<Section>>
     for &[a, b] in &molecule.bonds {
         connected[a] = true;
         connected[b] = true;
-        paths.push(vec![section(points[a]), section(points[b])]);
+        let mut start = section(points[a]);
+        let mut end = section(points[b]);
+        let dx = end.left[0] - start.left[0];
+        let dy = end.left[1] - start.left[1];
+        let length = dx.hypot(dy);
+        if width > 0.0 && length < 1e-10 {
+            // A bond viewed exactly end-on becomes an outline cap, not NaNs or
+            // a fabricated bond direction. No repeated coincident tracks.
+            paths.push(
+                (0..=16)
+                    .map(|i| {
+                        let angle = i as f64 * std::f64::consts::TAU / 16.0;
+                        section([
+                            points[a][0] + width * 0.5 * angle.cos(),
+                            points[a][1] + width * 0.5 * angle.sin(),
+                            points[a][2].max(points[b][2]),
+                        ])
+                    })
+                    .collect(),
+            );
+            continue;
+        }
+        if width > 0.0 {
+            let offset = [-dy / length * width * 0.5, dx / length * width * 0.5];
+            for s in [&mut start, &mut end] {
+                s.right = [s.left[0] + offset[0], s.left[1] + offset[1]];
+                s.left = [s.left[0] - offset[0], s.left[1] - offset[1]];
+            }
+        }
+        paths.push(vec![start, end]);
     }
     for (i, &point) in points.iter().enumerate() {
         if connected[i] {
@@ -82,4 +121,42 @@ pub(crate) fn preview(molecules: &[&Molecule]) -> Vec<Molecule> {
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn bond_bands_have_exact_width_separate_tracks_and_finite_end_on_caps() {
+        let camera = Camera {
+            center: [0.0; 3],
+            basis: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        };
+        let mut molecule = Molecule {
+            chain_id: "test".into(),
+            label: "test".into(),
+            category: "lipid".into(),
+            atoms: vec![[0.0; 3], [2.0, 0.0, 1.0]],
+            bonds: vec![[0, 1]],
+        };
+        let band = project(&molecule, &camera, 1.2);
+        assert_eq!(band.len(), 1);
+        for s in &band[0] {
+            assert!((s.width() - 1.2).abs() < 1e-12);
+        }
+        assert_eq!(band[0][0].z, 0.0);
+        assert_eq!(band[0][1].z, 1.0);
+        let tracks = profile(&band[0][0], 3);
+        assert_eq!(tracks.len(), 5);
+        assert!(tracks
+            .windows(2)
+            .all(|w| (w[1][1] - w[0][1] - 0.3).abs() < 1e-12));
+        molecule.atoms[1] = [0.0, 0.0, 2.0];
+        let cap = project(&molecule, &camera, 1.2);
+        assert_eq!(cap[0].len(), 17);
+        assert!(cap[0]
+            .iter()
+            .all(|s| s.left == s.right && s.left.into_iter().all(f64::is_finite)));
+        assert_eq!(cap[0][0].z, 2.0);
+    }
 }

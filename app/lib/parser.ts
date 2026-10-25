@@ -279,7 +279,7 @@ export async function parseStructure(text: string, name: string): Promise<Struct
   const warnings = assigned.length ? [ASSIGNMENT_WARNING] : [];
   if (molecules.length)
     warnings.push(
-      "Non-proteins use heavy-atom covalent bond lines (one line per bond); isolated atoms use outline circles. Connectivity uses local Mol* tables/file definitions with distance inference where unavailable. Missing atoms are not reconstructed; inter-component links and metal coordination are not drawn.",
+      "Non-proteins use heavy-atom covalent bond bands with group-specific drawing settings; isolated atoms use outline circles. Connectivity uses local Mol* tables/file definitions with distance inference where unavailable. Missing atoms are not reconstructed; inter-component links and metal coordination are not drawn.",
     );
   if (multiple) warnings.push("Only the first molecular model is used.");
   if (incomplete)

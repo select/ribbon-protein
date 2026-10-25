@@ -11,13 +11,24 @@ export interface BackboneSegment {
   residues: BackboneResidue[];
 }
 export type MoleculeCategory = "lipid" | "molecule" | "nucleic" | "water" | "ion";
+export interface MoleculeStyle {
+  /** Real longitudinal tracks between two bond outlines. */
+  lines: number;
+  /** Full artistic bond-band width in Å; zero keeps the original wire. */
+  bondWidthAngstrom: number;
+}
+export function defaultMoleculeStyle(category: MoleculeCategory): MoleculeStyle {
+  return category === "lipid"
+    ? { lines: 3, bondWidthAngstrom: 1.2 }
+    : { lines: 1, bondWidthAngstrom: 0.5 };
+}
 export interface Molecule {
   /** Selection/color ID; distinct from original protein chain IDs. */
   chainId: string;
   label: string;
   category: MoleculeCategory;
   atoms: Vec3[];
-  /** Heavy-atom covalent bonds; one line per bond, irrespective of order. */
+  /** Heavy-atom covalent bonds, irrespective of bond order. */
   bonds: [number, number][];
 }
 export interface StructureData {
@@ -38,6 +49,7 @@ export interface RenderOptions {
   lines: number;
   penWidthMm: number;
   lipidWidthMm: number;
+  moleculeStyles: Record<MoleculeCategory, MoleculeStyle>;
   samples: number;
   fillLoops: boolean;
   loopSpacingMm: number;
@@ -116,6 +128,13 @@ export function defaultRenderOptions(): RenderOptions {
     lines: 7,
     penWidthMm: 0.25,
     lipidWidthMm: 0.8,
+    moleculeStyles: {
+      lipid: defaultMoleculeStyle("lipid"),
+      molecule: defaultMoleculeStyle("molecule"),
+      nucleic: defaultMoleculeStyle("nucleic"),
+      water: defaultMoleculeStyle("water"),
+      ion: defaultMoleculeStyle("ion"),
+    },
     samples: 16,
     fillLoops: true,
     loopSpacingMm: 0.15,

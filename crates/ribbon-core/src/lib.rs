@@ -222,14 +222,15 @@ fn draw(
         .copied()
         .filter(|&i| i < request.structure.segments.len())
         .collect();
+    let mut molecular_lines = vec![None; sections.len()];
     for &index in &prepared.indices {
         if index < request.structure.segments.len() {
             continue;
         }
-        let paths = molecule::project(
-            &request.structure.molecules[index - request.structure.segments.len()],
-            &camera,
-        );
+        let m = &request.structure.molecules[index - request.structure.segments.len()];
+        let style = o.molecule_style(&m.category);
+        let paths = molecule::project(m, &camera, style.bond_width_angstrom);
+        molecular_lines.extend(std::iter::repeat_n(Some(style.lines), paths.len()));
         section_indices.extend(std::iter::repeat_n(index, paths.len()));
         sections.extend(paths);
     }
@@ -258,7 +259,28 @@ fn draw(
             timings,
         ));
     }
-    let tracks = ribbon::track_count(&sections, o)?;
+    let tracks = ribbon::track_count(&sections, o, &molecular_lines)?;
+    if sections
+        .iter()
+        .zip(&section_indices)
+        .zip(&molecular_lines)
+        .any(|((path, &index), lines)| {
+            lines.is_some_and(|lines| {
+                lines > 0
+                    && path.iter().any(|s| {
+                        s.width() > 1e-12
+                            && s.width() / ((lines + 1) as f64)
+                                < if is_lipid(&request.structure, index) {
+                                    o.lipid_width_mm
+                                } else {
+                                    o.pen_width_mm
+                                }
+                    })
+            })
+        })
+    {
+        warnings.push("Molecular tracks are closer than the pen stroke width and may merge in ink; increase group bond width, reduce interior lines or use a finer stroke.".into());
+    }
     if o.fill_loops && o.pen_width_mm > o.loop_spacing_mm {
         warnings
             .push("Pen width exceeds loop spacing; dense loop tracks may overlap in ink.".into());
@@ -281,7 +303,13 @@ fn draw(
             });
         }
     }
-    let visible = clip::visible_edges(&mut panels, section_indices.len(), tracks, o)?;
+    let visible = clip::visible_edges(
+        &mut panels,
+        section_indices.len(),
+        tracks,
+        o,
+        &molecular_lines,
+    )?;
     timings.clip_ms = now() - started;
     let started = now();
     let mut budget = paths::Budget::default();

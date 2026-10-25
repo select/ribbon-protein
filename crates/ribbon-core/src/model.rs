@@ -73,6 +73,34 @@ pub enum StrokeDirection {
     Travel,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MoleculeStyle {
+    pub lines: usize,
+    pub bond_width_angstrom: f64,
+}
+
+const MOLECULE_CATEGORIES: [&str; 5] = ["lipid", "molecule", "nucleic", "water", "ion"];
+fn default_molecule_style(category: &str) -> MoleculeStyle {
+    if category == "lipid" {
+        MoleculeStyle {
+            lines: 3,
+            bond_width_angstrom: 1.2,
+        }
+    } else {
+        MoleculeStyle {
+            lines: 1,
+            bond_width_angstrom: 0.5,
+        }
+    }
+}
+fn default_molecule_styles() -> BTreeMap<String, MoleculeStyle> {
+    MOLECULE_CATEGORIES
+        .into_iter()
+        .map(|c| (c.into(), default_molecule_style(c)))
+        .collect()
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RenderOptions {
@@ -86,6 +114,8 @@ pub struct RenderOptions {
     pub pen_width_mm: f64,
     #[serde(default = "default_lipid_width")]
     pub lipid_width_mm: f64,
+    #[serde(default = "default_molecule_styles")]
+    pub molecule_styles: BTreeMap<String, MoleculeStyle>,
     pub samples: usize,
     pub fill_loops: bool,
     pub loop_spacing_mm: f64,
@@ -101,6 +131,12 @@ fn default_lipid_width() -> f64 {
 }
 
 impl RenderOptions {
+    pub(crate) fn molecule_style(&self, category: &str) -> MoleculeStyle {
+        self.molecule_styles
+            .get(category)
+            .copied()
+            .unwrap_or_else(|| default_molecule_style(category))
+    }
     pub(crate) fn max_pen_width(&self, structure: &StructureData) -> f64 {
         if structure
             .molecules
@@ -126,6 +162,7 @@ impl Default for RenderOptions {
             lines: 7,
             pen_width_mm: 0.25,
             lipid_width_mm: default_lipid_width(),
+            molecule_styles: default_molecule_styles(),
             samples: 16,
             fill_loops: true,
             loop_spacing_mm: 0.15,
@@ -212,6 +249,15 @@ impl RenderRequest {
         }
         if !bounded(o.lipid_width_mm, 0.1, 2.0) {
             return fail("lipidWidthMm must be between 0.1 and 2 mm");
+        }
+        if o.molecule_styles.iter().any(|(category, style)| {
+            !MOLECULE_CATEGORIES.contains(&category.as_str())
+                || style.lines > 20
+                || !bounded(style.bond_width_angstrom, 0.0, 4.0)
+        }) {
+            return fail(
+                "moleculeStyles require known categories, lines 0..20 and bondWidthAngstrom 0..4",
+            );
         }
         if !bounded(o.margin_mm, 0.0, 1000.0)
             || 2.0 * o.margin_mm + o.max_pen_width(&self.structure) >= o.width_mm.min(o.height_mm)
@@ -304,8 +350,7 @@ impl RenderRequest {
                 || !molecular_ids.insert(molecule.chain_id.as_str())
                 || s.segments.iter().any(|s| s.chain_id == molecule.chain_id)
                 || molecule.label.len() > 512
-                || !["lipid", "molecule", "nucleic", "water", "ion"]
-                    .contains(&molecule.category.as_str())
+                || !MOLECULE_CATEGORIES.contains(&molecule.category.as_str())
                 || molecule.atoms.is_empty()
             {
                 return fail("Molecules need distinct known component IDs, bounded labels, categories and atoms");

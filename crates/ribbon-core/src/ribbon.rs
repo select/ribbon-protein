@@ -159,11 +159,13 @@ pub(crate) fn project_ribbon(samples: &[Sample], camera: &Camera) -> Vec<Section
     result
 }
 
-/// One shared count across the drawing, including duplicate ribbon tracks
-/// that merge into dense loop tracks. Never silently reduce requested density.
+/// One shared protein count, including duplicate ribbon tracks that merge
+/// into dense loops. Molecular bands have independent, nonduplicated counts.
+/// Bound the actual combined workload without silently reducing density.
 pub(crate) fn track_count(
     sections: &[Vec<Section>],
     options: &RenderOptions,
+    molecular_lines: &[Option<usize>],
 ) -> Result<usize, RenderError> {
     let max_loop_width = sections
         .iter()
@@ -184,12 +186,17 @@ pub(crate) fn track_count(
     }
     let panels: usize = sections
         .iter()
-        .map(|s| {
+        .enumerate()
+        .map(|(i, s)| {
             (s.len() - 1)
                 * if s.iter().all(|v| v.left == v.right) {
                     1
                 } else {
-                    count
+                    molecular_lines
+                        .get(i)
+                        .copied()
+                        .flatten()
+                        .map_or(count, |lines| lines + 2)
                 }
         })
         .sum();
@@ -250,6 +257,21 @@ mod tests {
         }
     }
     #[test]
+    fn molecular_density_is_included_in_the_track_work_budget() {
+        let o = RenderOptions {
+            lines: 0,
+            border_passes: 1,
+            fill_loops: false,
+            ..RenderOptions::default()
+        };
+        let sections = vec![vec![section(0.0, 1.0, 0.0), section(1.0, 1.0, 0.0)]; 45_455];
+        assert!(track_count(&sections, &o, &vec![Some(20); sections.len()]).is_err());
+        assert_eq!(
+            track_count(&sections, &o, &vec![Some(0); sections.len()]).unwrap(),
+            2
+        );
+    }
+    #[test]
     fn transition_profiles_share_seams_and_never_make_caps() {
         let o = RenderOptions::default();
         let sections = vec![vec![
@@ -257,7 +279,7 @@ mod tests {
             section(1.0, 2.0, 0.5),
             section(2.0, 0.4, 1.0),
         ]];
-        let count = track_count(&sections, &o).unwrap();
+        let count = track_count(&sections, &o, &[]).unwrap();
         assert_eq!(count, 13);
         let a = profile(&sections[0][0], count, &o);
         let b = profile(&sections[0][1], count, &o);
@@ -280,7 +302,7 @@ mod tests {
             assert!((p[1] - y).abs() < 1e-12);
         }
         let loop_section = section(1.0, 1.0, 1.0);
-        let count = track_count(&[vec![ribbon, loop_section.clone()]], &o).unwrap();
+        let count = track_count(&[vec![ribbon, loop_section.clone()]], &o, &[]).unwrap();
         let p = profile(&loop_section, count, &o);
         assert!(p
             .windows(2)

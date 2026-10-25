@@ -25,7 +25,7 @@ const pen = computed({
   <StudioSection title="Ink">
     <RangeField
       v-model="lines"
-      label="Interior lines"
+      label="Protein interior lines"
       :min="0"
       :max="20"
       :step="1"

@@ -45,6 +45,25 @@ describe("molecule group controls", () => {
     expect(o.chainColors).toEqual({ A: "black", other: "#123456", l1: "#aabbcc", l2: "#aabbcc" });
     expect(o.selectedChains).toEqual(["A", "l1"]);
   });
+  it("keeps each group drawing style independent and validates hidden groups", () => {
+    const o = defaultRenderOptions();
+    o.selectedChains = ["A"];
+    expect(o.moleculeStyles.lipid).toEqual({ lines: 3, bondWidthAngstrom: 1.2 });
+    o.moleculeStyles.lipid.lines = 8;
+    o.moleculeStyles.lipid.bondWidthAngstrom = 2;
+    expect(o.lines).toBe(7);
+    expect(o.moleculeStyles.molecule).toEqual({ lines: 1, bondWidthAngstrom: 0.5 });
+    expect(defaultRenderOptions().moleculeStyles.lipid.lines).toBe(3);
+    for (const lines of [-1, 1.5, 21, NaN]) {
+      o.moleculeStyles.water.lines = lines;
+      expect(() => validateOptions(o, mixed)).toThrow(/water interior lines/);
+    }
+    o.moleculeStyles.water.lines = 0;
+    for (const width of [-0.1, 4.1, Infinity, NaN]) {
+      o.moleculeStyles.water.bondWidthAngstrom = width;
+      expect(() => validateOptions(o, mixed)).toThrow(/water bond width/);
+    }
+  });
   it("reserves the thicker lipid stroke in page fitting only when lipids are selected", () => {
     const o = defaultRenderOptions();
     expect(o.lipidWidthMm).toBe(0.8);

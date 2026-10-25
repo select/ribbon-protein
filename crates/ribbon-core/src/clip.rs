@@ -158,6 +158,7 @@ pub(crate) fn visible_edges(
     segment_count: usize,
     tracks: usize,
     options: &RenderOptions,
+    molecular_lines: &[Option<usize>],
 ) -> Result<Vec<Vec<Edge>>, RenderError> {
     // Stable tie breaking matches Python's stable panel sort without relying
     // on hash iteration or R-tree insertion order.
@@ -185,16 +186,18 @@ pub(crate) fn visible_edges(
     let mut pieces = 0usize;
     for (index, panel) in panels.iter().enumerate() {
         let wire = panel.start.left == panel.start.right && panel.end.left == panel.end.right;
-        let start = if wire {
-            vec![panel.start.left]
-        } else {
-            profile(&panel.start, tracks, options)
+        let lines = molecular_lines.get(panel.segment).copied().flatten();
+        let section_profile = |section: &Section| {
+            if wire {
+                vec![section.left]
+            } else if let Some(lines) = lines {
+                crate::molecule::profile(section, lines)
+            } else {
+                profile(section, tracks, options)
+            }
         };
-        let end = if wire {
-            vec![panel.end.left]
-        } else {
-            profile(&panel.end, tracks, options)
-        };
+        let start = section_profile(&panel.start);
+        let end = section_profile(&panel.end);
         let mut previous = None;
         for (a, b) in start.into_iter().zip(end) {
             let source = [a, b];
@@ -352,6 +355,7 @@ mod tests {
                 border_passes: 1,
                 ..RenderOptions::default()
             },
+            &[],
         )
         .unwrap();
         assert_eq!(
@@ -389,7 +393,7 @@ mod tests {
             border_passes: 1,
             ..RenderOptions::default()
         };
-        let groups = visible_edges(&mut panels, 2, 3, &o).unwrap();
+        let groups = visible_edges(&mut panels, 2, 3, &o, &[]).unwrap();
         assert_eq!(groups[0].len(), 4); // two borders + split center
         assert_eq!(groups[1].len(), 3);
         assert!(

@@ -29,6 +29,12 @@ export function validateOptions(o: RenderOptions, s: StructureData): void {
   if (o.marginMm * 2 + drawingPenWidth(o, s) >= Math.min(o.widthMm, o.heightMm))
     throw new Error("Paper must be larger than twice the margin plus the pen width.");
   range("Interior lines", o.lines, 0, 20, true);
+  for (const [category, style] of Object.entries(o.moleculeStyles)) {
+    if (!["lipid", "molecule", "nucleic", "water", "ion"].includes(category))
+      throw new Error("Unknown molecular drawing group.");
+    range(`${category} interior lines`, style.lines, 0, 20, true);
+    range(`${category} bond width (Å)`, style.bondWidthAngstrom, 0, 4);
+  }
   range("Samples", o.samples, 2, 64, true);
   range("Border passes", o.borderPasses, 1, 3, true);
   range("Loop spacing (mm)", o.loopSpacingMm, 0.02, 10);

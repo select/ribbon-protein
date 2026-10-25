@@ -30,6 +30,56 @@ describe.skipIf(!available)(
       renderJson = wasm.render_json;
       Session = wasm.RenderSession;
     });
+    it("changes real lipid tracks independently of protein lines through the generated module", async () => {
+      const lipid = await parseStructure(
+        await readFile(new URL("./fixtures/6baj-lipid.cif", import.meta.url), "utf8"),
+        "lipid.cif",
+      );
+      const protein = await parseStructure(
+        await readFile(new URL("../public/examples/1crn-backbone.pdb", import.meta.url), "utf8"),
+        "protein.pdb",
+      );
+      const structure = {
+        ...protein,
+        molecules: lipid.molecules,
+        chains: [...protein.chains, ...lipid.chains],
+      };
+      const options = defaultRenderOptions();
+      options.selectedChains = structure.chains.map((c) => c.id);
+      options.chainColors = { [lipid.chains[0]!.id]: "#c4302b" };
+      const session = new Session(JSON.stringify(structure));
+      const group = (svg: string, color: string) =>
+        [...svg.matchAll(/<g id="pen-\d+" stroke="([^"]+)"[^>]*>([\s\S]*?)<\/g>/g)].find(
+          (match) => match[1] === color,
+        )?.[2];
+      const calculate = () => {
+        const { result, timings } = JSON.parse(
+          session.render_options_json(JSON.stringify(options), false),
+        );
+        expect(result).toEqual(JSON.parse(renderJson(JSON.stringify({ structure, options }))));
+        validateSvg(result.svg);
+        return { result: result as RenderResult, timings };
+      };
+      try {
+        const first = calculate();
+        options.moleculeStyles.lipid.lines = 8;
+        const more = calculate();
+        expect(more.timings.geometryCacheHit).toBe(true);
+        expect(more.timings.pathCacheHit).toBe(false);
+        expect(more.result.strokeCount).toBeGreaterThan(first.result.strokeCount);
+        expect(group(more.result.svg, "black")).toBe(group(first.result.svg, "black"));
+        expect(group(more.result.svg, "#c4302b")).not.toBe(group(first.result.svg, "#c4302b"));
+        expect(group(first.result.svg, "#c4302b")).toBeTruthy();
+        options.lines = 0;
+        const fewerProtein = calculate();
+        expect(group(fewerProtein.result.svg, "#c4302b")).toBe(group(more.result.svg, "#c4302b"));
+        expect(group(fewerProtein.result.svg, "black")).not.toBe(group(more.result.svg, "black"));
+        options.moleculeStyles.lipid.bondWidthAngstrom = 2;
+        expect(calculate().result.svg).not.toBe(fewerProtein.result.svg);
+      } finally {
+        session.free();
+      }
+    });
     it("renders a real lipid alone and with protein, including color/selection caches and drag previews", async () => {
       const lipid = await parseStructure(
         await readFile(new URL("./fixtures/6baj-lipid.cif", import.meta.url), "utf8"),

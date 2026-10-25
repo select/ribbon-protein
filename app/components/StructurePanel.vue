@@ -148,46 +148,75 @@ function chainLabel(id: string): string {
           <div
             v-for="group in groups"
             :key="group.category"
-            class="molecule-group"
+            class="molecule-category"
             :data-category="group.category"
           >
-            <label>
+            <div class="molecule-group">
+              <label>
+                <input
+                  type="checkbox"
+                  :checked="groupCount(group.ids) === group.ids.length"
+                  :indeterminate="
+                    groupCount(group.ids) > 0 && groupCount(group.ids) < group.ids.length
+                  "
+                  :aria-label="`Show all ${group.label.toLowerCase()}`"
+                  @change="toggleGroup(group.ids, ($event.target as HTMLInputElement).checked)"
+                />
+                {{ group.label }}
+                <span class="count rs-num">{{ groupCount(group.ids) }}/{{ group.ids.length }}</span>
+              </label>
               <input
-                type="checkbox"
-                :checked="groupCount(group.ids) === group.ids.length"
-                :indeterminate="
-                  groupCount(group.ids) > 0 && groupCount(group.ids) < group.ids.length
+                type="color"
+                :value="colorOf(group.ids[0]!)"
+                :aria-label="`Color all ${group.label.toLowerCase()}`"
+                :title="`Apply color to all ${group.label.toLowerCase()}, including hidden components`"
+                @input="
+                  colorMoleculeGroup(
+                    studio.options,
+                    group.ids,
+                    ($event.target as HTMLInputElement).value,
+                  )
                 "
-                :aria-label="`Show all ${group.label.toLowerCase()}`"
-                @change="toggleGroup(group.ids, ($event.target as HTMLInputElement).checked)"
               />
-              {{ group.label }}
-              <span class="count rs-num">{{ groupCount(group.ids) }}/{{ group.ids.length }}</span>
-            </label>
-            <input
-              type="color"
-              :value="colorOf(group.ids[0]!)"
-              :aria-label="`Color all ${group.label.toLowerCase()}`"
-              :title="`Apply color to all ${group.label.toLowerCase()}, including hidden components`"
-              @input="
-                colorMoleculeGroup(
-                  studio.options,
-                  group.ids,
-                  ($event.target as HTMLInputElement).value,
-                )
-              "
-            />
+            </div>
+            <details
+              v-if="group.ids.some((id) => molecules.get(id)!.bonds.length)"
+              :open="group.category === 'lipid'"
+              class="molecule-drawing"
+            >
+              <summary>{{ group.label }} drawing</summary>
+              <RangeField
+                v-model="studio.options.moleculeStyles[group.category].lines"
+                :label="`${group.label} interior lines`"
+                :min="0"
+                :max="20"
+                :step="1"
+              />
+              <RangeField
+                v-model="studio.options.moleculeStyles[group.category].bondWidthAngstrom"
+                :label="`${group.label} bond width`"
+                unit="Å"
+                :min="0"
+                :max="4"
+                :step="0.1"
+              />
+              <RangeField
+                v-if="group.category === 'lipid'"
+                v-model="studio.options.lipidWidthMm"
+                label="Lipid stroke"
+                unit="mm"
+                :min="0.1"
+                :max="2"
+                :step="0.05"
+              />
+              <p class="rs-hint">
+                Bond width sets the artistic band thickness. Above 0 Å, each bond has two outlines
+                plus the interior lines. At 0 Å, bonds are single wires. Protein line settings stay
+                separate.
+              </p>
+            </details>
           </div>
         </div>
-        <RangeField
-          v-if="groups.some((group) => group.category === 'lipid')"
-          v-model="studio.options.lipidWidthMm"
-          label="Lipid stroke"
-          unit="mm"
-          :min="0.1"
-          :max="2"
-          :step="0.05"
-        />
         <ul class="chain-list" aria-labelledby="chains-label">
           <li
             v-for="chain in chains"
@@ -241,7 +270,7 @@ function chainLabel(id: string): string {
         <p v-else class="rs-hint">
           {{ selectedResidues.toLocaleString() }} protein residues selected (local DSSP).
           <template v-if="molecules.size"
-            >Non-proteins: heavy-atom bond lines and isolated-atom circles. Water is hidden
+            >Non-proteins: heavy-atom bond bands and isolated-atom circles. Water is hidden
             initially; hydrogens are omitted.</template
           >
         </p>
@@ -255,6 +284,18 @@ function chainLabel(id: string): string {
   display: grid;
   gap: 6px;
   font-size: 12px;
+}
+.molecule-drawing {
+  margin: 6px 0 8px;
+  padding: 8px;
+  border: 1px solid var(--rs-line);
+  border-radius: 4px;
+  display: grid;
+  gap: 6px;
+}
+.molecule-drawing summary {
+  cursor: pointer;
+  margin-bottom: 6px;
 }
 .molecule-group {
   display: flex;

@@ -58,6 +58,43 @@ describe("bounded display-only prepared 3D preview", () => {
       expect(Number(match[2])).toBeLessThanOrEqual(87.1401);
     }
   });
+  it("previews bond widths as real outlines, handles end-on bonds, and keeps atoms as circles", () => {
+    const molecular: PreviewScene = {
+      ...scene,
+      ribbons: [],
+      molecules: [
+        {
+          chainId: "lipid",
+          label: "lipid",
+          category: "lipid",
+          atoms: [
+            [0, 0, 0],
+            [2, 0, 0],
+            [0, 4, 0],
+          ],
+          bonds: [[0, 1]],
+        },
+      ],
+    };
+    const o = defaultRenderOptions();
+    o.selectedChains = ["lipid"];
+    const before = structuredClone(molecular);
+    const band = renderInteractionPreview(molecular, o);
+    expect(band.strokeCount).toBe(3); // two band outlines, one orphan circle
+    o.moleculeStyles.lipid.bondWidthAngstrom = 2;
+    expect(renderInteractionPreview(molecular, o).svg).not.toBe(band.svg);
+    o.moleculeStyles.lipid.lines = 20;
+    expect(renderInteractionPreview(molecular, o).strokeCount).toBe(3); // drag remains outlines-only
+    o.moleculeStyles.lipid.bondWidthAngstrom = 0;
+    expect(renderInteractionPreview(molecular, o).strokeCount).toBe(2);
+    expect(molecular).toEqual(before);
+    molecular.molecules![0]!.atoms[1] = [0, 0, 2];
+    o.moleculeStyles.lipid.bondWidthAngstrom = 2;
+    const endOn = renderInteractionPreview(molecular, o);
+    expect(endOn.strokeCount).toBe(2);
+    expect(endOn.svg).not.toMatch(/NaN|Infinity/);
+    validateSvg(endOn.svg);
+  });
   it("handles empty selections without nonfinite SVG and keys only sample/selection geometry", () => {
     const options = defaultRenderOptions();
     const empty = renderInteractionPreview({ ...scene, ribbons: [] }, options);

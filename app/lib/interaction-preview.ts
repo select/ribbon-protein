@@ -82,15 +82,27 @@ export function renderInteractionPreview(scene: PreviewScene, o: RenderOptions):
       return [dot(basis[0], p), -dot(basis[1], p)];
     });
     const connected = new Set(molecule.bonds.flat());
-    const molecularPaths: P2[][] = molecule.bonds.map(([a, b]) => [points[a]!, points[b]!]);
+    const width = o.moleculeStyles[molecule.category].bondWidthAngstrom;
+    const circle = (p: P2, radius: number): P2[] =>
+      Array.from({ length: 17 }, (_, step): P2 => {
+        const angle = (step * Math.PI * 2) / 16;
+        return [p[0] + radius * Math.cos(angle), p[1] + radius * Math.sin(angle)];
+      });
+    const molecularPaths: P2[][] = molecule.bonds.flatMap(([a, b]): P2[][] => {
+      const start = points[a]!,
+        end = points[b]!;
+      if (!width) return [[start, end]];
+      const dx = end[0] - start[0],
+        dy = end[1] - start[1],
+        length = Math.hypot(dx, dy);
+      if (length < 1e-10) return [circle(start, width * 0.5)];
+      const offset: P2 = [(-dy / length) * width * 0.5, (dx / length) * width * 0.5];
+      return [-1, 1].map((sign) =>
+        [start, end].map((p) => [p[0] + sign * offset[0], p[1] + sign * offset[1]] as P2),
+      );
+    });
     points.forEach((p, i) => {
-      if (!connected.has(i))
-        molecularPaths.push(
-          Array.from({ length: 17 }, (_, step): P2 => {
-            const angle = (step * Math.PI * 2) / 16;
-            return [p[0] + 0.35 * Math.cos(angle), p[1] + 0.35 * Math.sin(angle)];
-          }),
-        );
+      if (!connected.has(i)) molecularPaths.push(circle(p, 0.35));
     });
     for (const path of molecularPaths)
       for (const p of path)

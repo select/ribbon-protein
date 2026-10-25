@@ -52,7 +52,7 @@ fn molecular_only_bonds_and_isolated_atoms_are_finite_line_only_and_fit_the_page
     let req = request();
     let result = render(&req).unwrap();
     assert_eq!(result.residue_count, 0);
-    assert_eq!(result.stroke_count, 4); // two bonds, two isolated atom outlines
+    assert_eq!(result.stroke_count, 8); // two three-track bonds, two isolated atom outlines
     assert!(result.length_mm > 0.0);
     assert!(!result.svg.contains("NaN") && !result.svg.contains("Infinity"));
     assert!(!result.svg.contains("<circle") && !result.svg.contains("<mask"));
