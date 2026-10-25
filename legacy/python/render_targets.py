@@ -11,7 +11,7 @@ import subprocess
 import sys
 
 import gemmi
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 TARGETS = [
     ('1ten', 'Tenascin domain'),
@@ -116,13 +116,20 @@ def main():
     cell_w, cell_h = 420, 650
     sheet = Image.new('RGB', (3 * cell_w, ((len(entries) + 2) // 3) * cell_h), '#f5f5f2')
     draw = ImageDraw.Draw(sheet)
+    try:
+        label_font = ImageFont.truetype('DejaVuSans.ttf', 20)
+        name_font = ImageFont.truetype('DejaVuSans.ttf', 15)
+    except OSError:
+        label_font = ImageFont.load_default(size=20)
+        name_font = ImageFont.load_default(size=15)
     for i, entry in enumerate(entries):
         x, y = (i % 3) * cell_w, (i // 3) * cell_h
         with Image.open(args.output / entry['png']) as original:
             image = original.convert('RGB')
             image.thumbnail((cell_w - 20, cell_h - 55))
             sheet.paste(image, (x + (cell_w - image.width) // 2, y + 8))
-        draw.text((x + 15, y + cell_h - 40), f"{entry['id'].upper()} — {entry['name']}", fill='#222')
+        draw.text((x + 15, y + cell_h - 49), entry['id'].upper(), fill='#222', font=label_font)
+        draw.text((x + 15, y + cell_h - 23), entry['name'], fill='#444', font=name_font)
     sheet.save(args.output / 'contact-sheet.png')
     print(f'Gallery: {(args.output / "index.html").resolve()}', flush=True)
 
