@@ -5,6 +5,7 @@ export default defineConfig({
     presetIcons({
       collections: {
         lucide: () => import("@iconify-json/lucide/icons.json").then((i) => i.default),
+        mdi: () => import("@iconify-json/mdi/icons.json").then((i) => i.default),
       },
     }),
   ],

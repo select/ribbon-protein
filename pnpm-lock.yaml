@@ -31,6 +31,9 @@ importers:
       '@iconify-json/lucide':
         specifier: 1.2.99
         version: 1.2.99
+      '@iconify-json/mdi':
+        specifier: 1.2.3
+        version: 1.2.3
       '@types/node':
         specifier: 25.7.0
         version: 25.7.0
@@ -494,6 +497,9 @@ packages:
 
   '@iconify-json/lucide@1.2.99':
     resolution: {integrity: sha512-XE2Pg8uax2uN3ZbvvnO0C5ADgZOyUgEPiwnhD/xrJwz/bfpWwL3mbDwxntEWB2G1mwo2OqKMF50/jp6ia2QzKw==}
+
+  '@iconify-json/mdi@1.2.3':
+    resolution: {integrity: sha512-O3cLwbDOK7NNDf2ihaQOH5F9JglnulNDFV7WprU2dSoZu3h3cWH//h74uQAB87brHmvFVxIOkuBX2sZSzYhScg==}
 
   '@iconify/types@2.0.0':
     resolution: {integrity: sha512-+wluvCrRhXrhyOmRDJ3q8mux9JkKy5SJ/v8ol2tu4FVjyYvtEzkc/3pK15ET6RKg4b4w4BmTk1+gsCUhf21Ykg==}
@@ -5447,6 +5453,10 @@ snapshots:
     optional: true
 
   '@iconify-json/lucide@1.2.99':
+    dependencies:
+      '@iconify/types': 2.0.0
+
+  '@iconify-json/mdi@1.2.3':
     dependencies:
       '@iconify/types': 2.0.0
 

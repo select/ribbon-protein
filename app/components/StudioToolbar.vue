@@ -107,6 +107,16 @@ const title = computed(() => studio.fileName || studio.structure?.name || "Untit
         SVG
       </button>
       <span id="export-blocked" class="rs-visually-hidden">{{ exportBlocked }}</span>
+      <a
+        class="rs-btn rs-btn--ghost rs-btn--icon github-link"
+        href="https://github.com/select/ribbon-protein"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="View source on GitHub (opens in a new tab)"
+        title="View source on GitHub (opens in a new tab)"
+      >
+        <span class="i-mdi-github" aria-hidden="true" />
+      </a>
     </div>
   </header>
 </template>
@@ -134,6 +144,16 @@ const title = computed(() => studio.fileName || studio.structure?.name || "Untit
 .right {
   flex: none;
   gap: 6px;
+}
+
+.github-link {
+  flex: none;
+  text-decoration: none;
+}
+
+.github-link .i-mdi-github {
+  width: 18px;
+  height: 18px;
 }
 
 .menu {
@@ -213,6 +233,17 @@ const title = computed(() => studio.fileName || studio.structure?.name || "Untit
 }
 
 @media (max-width: 520px) {
+  .toolbar {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .right {
+    max-width: 100%;
+    margin-left: auto;
+    gap: 4px;
+  }
+
   .doc-title {
     display: none;
   }
