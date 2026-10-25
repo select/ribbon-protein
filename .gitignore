@@ -1,0 +1,19 @@
+# Python environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Generated renders and downloaded/local structure bundles
+/output/
+/blender_message_top40/
+/blender_message_top40.zip
+
+# Local secrets and operating-system files
+.env
+.env.*
+!.env.example
+.DS_Store
