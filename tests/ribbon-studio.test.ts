@@ -56,7 +56,9 @@ describe("useRibbon reactive runtime", () => {
     await h.studio.loadFile(file());
     expect(h.studio.options.selectedChains).toEqual(["A", "lipid"]);
     expect(h.studio.options.chainColors).toEqual({ lipid: "#c4302b" });
-    expect(h.studio.options.lipidWidthMm).toBe(0.8);
+    expect(h.studio.options.penWidthMm).toBe(0.4);
+    expect(h.studio.options.lipidWidthMm).toBe(h.studio.options.penWidthMm);
+    expect(h.studio.options.moleculeStyles.lipid).toEqual({ lines: 0, bondWidthAngstrom: 0.4 });
     expect(h.runtime.render.mock.calls[0]![0].options.selectedChains).toEqual(["A", "lipid"]);
     h.studio.options.selectedChains.push("water");
     await vi.advanceTimersByTimeAsync(180);

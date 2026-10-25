@@ -84,8 +84,8 @@ const MOLECULE_CATEGORIES: [&str; 5] = ["lipid", "molecule", "nucleic", "water",
 fn default_molecule_style(category: &str) -> MoleculeStyle {
     if category == "lipid" {
         MoleculeStyle {
-            lines: 3,
-            bond_width_angstrom: 1.2,
+            lines: 0,
+            bond_width_angstrom: 0.4,
         }
     } else {
         MoleculeStyle {
@@ -127,7 +127,7 @@ pub struct RenderOptions {
 }
 
 fn default_lipid_width() -> f64 {
-    0.8
+    0.4
 }
 
 impl RenderOptions {
@@ -160,7 +160,7 @@ impl Default for RenderOptions {
             margin_mm: 15.0,
             rotation: [0.0; 3],
             lines: 7,
-            pen_width_mm: 0.25,
+            pen_width_mm: 0.4,
             lipid_width_mm: default_lipid_width(),
             molecule_styles: default_molecule_styles(),
             samples: 16,

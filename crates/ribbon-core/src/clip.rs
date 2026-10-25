@@ -158,7 +158,7 @@ pub(crate) fn visible_edges(
     segment_count: usize,
     tracks: usize,
     options: &RenderOptions,
-    molecular_lines: &[Option<usize>],
+    molecular_lines: &[Option<crate::molecule::Profile>],
 ) -> Result<Vec<Vec<Edge>>, RenderError> {
     // Stable tie breaking matches Python's stable panel sort without relying
     // on hash iteration or R-tree insertion order.
@@ -187,10 +187,13 @@ pub(crate) fn visible_edges(
     for (index, panel) in panels.iter().enumerate() {
         let wire = panel.start.left == panel.start.right && panel.end.left == panel.end.right;
         let lines = molecular_lines.get(panel.segment).copied().flatten();
+        if matches!(lines, Some(crate::molecule::Profile::Surface)) {
+            continue;
+        }
         let section_profile = |section: &Section| {
             if wire {
                 vec![section.left]
-            } else if let Some(lines) = lines {
+            } else if let Some(crate::molecule::Profile::Band(lines)) = lines {
                 crate::molecule::profile(section, lines)
             } else {
                 profile(section, tracks, options)
@@ -199,8 +202,12 @@ pub(crate) fn visible_edges(
         let start = section_profile(&panel.start);
         let end = section_profile(&panel.end);
         let mut previous = None;
-        for (a, b) in start.into_iter().zip(end) {
-            let source = [a, b];
+        for (track, (a, b)) in start.into_iter().zip(end).enumerate() {
+            // Opposite sides run in opposite directions so a terminal cap
+            // joins them into one real U-turn even in directed plotter mode.
+            let reverse =
+                matches!(lines, Some(crate::molecule::Profile::Band(n)) if track * 2 > n + 1);
+            let source = if reverse { [b, a] } else { [a, b] };
             if norm(sub(b, a)) < 1e-12 || previous == Some(source) {
                 continue;
             }

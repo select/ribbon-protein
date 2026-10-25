@@ -52,7 +52,8 @@ fn molecular_only_bonds_and_isolated_atoms_are_finite_line_only_and_fit_the_page
     let req = request();
     let result = render(&req).unwrap();
     assert_eq!(result.residue_count, 0);
-    assert_eq!(result.stroke_count, 8); // two three-track bonds, two isolated atom outlines
+    // One connected outline, one unpaired centerline, two isolated circles.
+    assert_eq!(result.stroke_count, 4);
     assert!(result.length_mm > 0.0);
     assert!(!result.svg.contains("NaN") && !result.svg.contains("Infinity"));
     assert!(!result.svg.contains("<circle") && !result.svg.contains("<mask"));
@@ -117,6 +118,94 @@ fn lipids_have_independent_width_even_when_sharing_a_color_with_other_molecules(
     }
 }
 
+#[test]
+fn rounded_rings_branches_and_tiny_bonds_fit_and_keep_exact_session_parity() {
+    for (atoms, bonds) in [
+        (
+            vec![
+                [0.0, 0.0, 0.0],
+                [2.0, 0.0, 0.0],
+                [2.0, 2.0, 0.0],
+                [0.0, 2.0, 0.0],
+            ],
+            vec![[0, 1], [1, 2], [2, 3], [3, 0]],
+        ),
+        (
+            vec![
+                [0.0; 3],
+                [3.0, 0.0, 0.0],
+                [-2.0, 2.0, 0.0],
+                [-2.0, -2.0, 1.0],
+            ],
+            vec![[0, 1], [0, 2], [0, 3]],
+        ),
+        (vec![[0.0; 3], [0.0, 0.0, 2.0]], vec![[0, 1]]),
+        (
+            vec![[0.0; 3], [1e-8, 0.0, 1.0], [0.0, 1e-9, 2.0]],
+            vec![[0, 1], [1, 2]],
+        ),
+    ] {
+        let mut req = request();
+        req.structure.molecules.truncate(1);
+        req.structure.molecules[0].atoms = atoms;
+        req.structure.molecules[0].bonds = bonds;
+        req.structure.molecules[0].category = "lipid".into();
+        req.options.selected_chains = vec!["ligand".into()];
+        let mut session = RenderSession::new(req.structure.clone()).unwrap();
+        for width in [0.0, 0.4, 4.0] {
+            for lines in [0, 3] {
+                req.options
+                    .molecule_styles
+                    .get_mut("lipid")
+                    .unwrap()
+                    .bond_width_angstrom = width;
+                req.options.molecule_styles.get_mut("lipid").unwrap().lines = lines;
+                for rotation in [[0.0; 3], [90.0, 13.0, 27.0]] {
+                    req.options.rotation = rotation;
+                    let exact = render(&req).unwrap();
+                    assert!(!exact.svg.contains("NaN") && !exact.svg.contains("Infinity"));
+                    assert_eq!(
+                        session.calculate(req.options.clone(), false).unwrap().0.svg,
+                        exact.svg
+                    );
+                    assert!(
+                        session
+                            .calculate(req.options.clone(), false)
+                            .unwrap()
+                            .1
+                            .path_cache_hit
+                    );
+                    for point in exact
+                        .svg
+                        .split("d=\"")
+                        .skip(1)
+                        .filter(|p| p.starts_with('M'))
+                    {
+                        for xy in point
+                            .split('"')
+                            .next()
+                            .unwrap()
+                            .split(['M', 'L'])
+                            .filter(|v| !v.is_empty())
+                        {
+                            let p: Vec<f64> = xy.split(',').map(|v| v.parse().unwrap()).collect();
+                            let clearance = req.options.margin_mm
+                                + req.options.lipid_width_mm.max(req.options.pen_width_mm) * 0.5;
+                            assert!(
+                                p[0] >= clearance - 0.0001
+                                    && p[0] <= req.options.width_mm - clearance + 0.0001
+                            );
+                            assert!(
+                                p[1] >= clearance - 0.0001
+                                    && p[1] <= req.options.height_mm - clearance + 0.0001
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 #[test]
 fn malformed_molecular_geometry_is_rejected_even_when_unselected() {
     let req = request();

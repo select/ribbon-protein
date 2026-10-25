@@ -196,7 +196,7 @@ fn actual_render_is_finite_line_only_svg_with_physical_statistics() {
     assert_eq!(r.residue_count, 48);
     assert_eq!(r.elapsed_ms, 0.0);
     assert!(r.svg.contains("width=\"210mm\" height=\"297mm\""));
-    assert!(r.svg.contains("stroke-width=\"0.25\""));
+    assert!(r.svg.contains("stroke-width=\"0.4\""));
     assert!(r.svg.contains("synthetic &amp; test &lt;ribbon&gt;"));
     for forbidden in [
         "<polygon",

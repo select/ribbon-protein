@@ -40,7 +40,9 @@ fn each_group_has_real_distinct_tracks_independent_of_protein_settings() {
     for lines in [0, 1, 3, 8, 20] {
         req.options.molecule_styles.get_mut("lipid").unwrap().lines = lines;
         let result = render(&req).unwrap();
-        assert_eq!(result.stroke_count, lines + 2 + 3);
+        // A U-turn connects each symmetric pair into one nested contour;
+        // an unpaired middle track remains one open centerline.
+        assert_eq!(result.stroke_count, (lines + 2).div_ceil(2) + 2);
         let paths: Vec<_> = result
             .svg
             .lines()
@@ -64,13 +66,16 @@ fn each_group_has_real_distinct_tracks_independent_of_protein_settings() {
         .get_mut("molecule")
         .unwrap()
         .lines = 5;
-    assert_eq!(render(&req).unwrap().stroke_count, 22 + 7);
+    assert_eq!(render(&req).unwrap().stroke_count, 11 + 4);
 }
 
 #[test]
 fn group_width_changes_geometry_and_zero_width_restores_single_wires_with_cache_parity() {
     let mut req = request();
     let mut session = RenderSession::new(req.structure.clone()).unwrap();
+    // Exercise non-default density explicitly: outlines, one nested pair and
+    // an unpaired centerline, irrespective of the lipid defaults.
+    req.options.molecule_styles.get_mut("lipid").unwrap().lines = 3;
     let mut previous = String::new();
     for width in [0.0, 0.5, 1.2, 4.0] {
         req.options
@@ -80,7 +85,7 @@ fn group_width_changes_geometry_and_zero_width_restores_single_wires_with_cache_
             .bond_width_angstrom = width;
         let (actual, timing) = session.calculate(req.options.clone(), false).unwrap();
         assert_eq!(actual.svg, render(&req).unwrap().svg);
-        assert_eq!(actual.stroke_count, if width == 0.0 { 1 } else { 5 } + 3);
+        assert_eq!(actual.stroke_count, if width == 0.0 { 1 } else { 3 } + 2);
         assert_ne!(actual.svg, previous);
         assert!(!timing.path_cache_hit);
         if !previous.is_empty() {

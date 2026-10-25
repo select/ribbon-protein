@@ -19,7 +19,7 @@ export interface MoleculeStyle {
 }
 export function defaultMoleculeStyle(category: MoleculeCategory): MoleculeStyle {
   return category === "lipid"
-    ? { lines: 3, bondWidthAngstrom: 1.2 }
+    ? { lines: 0, bondWidthAngstrom: 0.4 }
     : { lines: 1, bondWidthAngstrom: 0.5 };
 }
 export interface Molecule {
@@ -63,10 +63,14 @@ export interface RenderRequest {
   structure: StructureData;
   options: RenderOptions;
 }
+export interface PreviewMolecule extends Molecule {
+  /** True source terminals only; sampled preview cuts must not gain caps. */
+  terminalAtoms?: number[];
+}
 export interface PreviewScene {
   center: Vec3;
   basis: [Vec3, Vec3, Vec3];
-  molecules?: Molecule[];
+  molecules?: PreviewMolecule[];
   ribbons: {
     chainId: string;
     samples: { point: Vec3; side: Vec3; width: number; alpha: number }[];
@@ -126,8 +130,8 @@ export function defaultRenderOptions(): RenderOptions {
     marginMm: 15,
     rotation: [0, 0, 0],
     lines: 7,
-    penWidthMm: 0.25,
-    lipidWidthMm: 0.8,
+    penWidthMm: 0.4,
+    lipidWidthMm: 0.4,
     moleculeStyles: {
       lipid: defaultMoleculeStyle("lipid"),
       molecule: defaultMoleculeStyle("molecule"),

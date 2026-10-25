@@ -223,16 +223,25 @@ fn draw(
         .filter(|&i| i < request.structure.segments.len())
         .collect();
     let mut molecular_lines = vec![None; sections.len()];
+    let mut molecular_budget = molecule::Budget::default();
     for &index in &prepared.indices {
         if index < request.structure.segments.len() {
             continue;
         }
         let m = &request.structure.molecules[index - request.structure.segments.len()];
         let style = o.molecule_style(&m.category);
-        let paths = molecule::project(m, &camera, style.bond_width_angstrom);
-        molecular_lines.extend(std::iter::repeat_n(Some(style.lines), paths.len()));
-        section_indices.extend(std::iter::repeat_n(index, paths.len()));
-        sections.extend(paths);
+        let paths = molecule::project(
+            m,
+            &camera,
+            style.bond_width_angstrom,
+            if preview { 0 } else { style.lines },
+            &mut molecular_budget,
+        )?;
+        for path in paths {
+            molecular_lines.push(Some(path.profile));
+            section_indices.push(index);
+            sections.push(path.sections);
+        }
     }
     fit_page(&mut sections, o, o.max_pen_width(&request.structure))?;
     timings.project_ms = now() - started;
@@ -240,7 +249,11 @@ fn draw(
         warnings.push("Interaction preview: ribbon outlines and molecular bonds, without hidden-line removal. Refine before exporting.".into());
         let paths = sections
             .iter()
-            .map(|s| {
+            .enumerate()
+            .map(|(i, s)| {
+                if matches!(molecular_lines[i], Some(molecule::Profile::Surface)) {
+                    return vec![];
+                }
                 let left = s.iter().map(|v| v.left).collect();
                 if s.iter().all(|v| v.left == v.right) {
                     vec![left]
@@ -265,7 +278,10 @@ fn draw(
         .zip(&section_indices)
         .zip(&molecular_lines)
         .any(|((path, &index), lines)| {
-            lines.is_some_and(|lines| {
+            lines.is_some_and(|profile| {
+                let molecule::Profile::Band(lines) = profile else {
+                    return false;
+                };
                 lines > 0
                     && path.iter().any(|s| {
                         s.width() > 1e-12
@@ -314,7 +330,20 @@ fn draw(
     let started = now();
     let mut budget = paths::Budget::default();
     let directed = o.stroke_direction == StrokeDirection::Backbone;
-    let paths = visible
+    // A molecule's strips, cap arcs and branch joins are separate clipping
+    // primitives, but one joining domain. Never join separate components or
+    // protein backbone fragments merely because their colors coincide.
+    let mut joined_indices = Vec::new();
+    let mut groups: Vec<Vec<clip::Edge>> = Vec::new();
+    for (index, edges) in section_indices.into_iter().zip(visible) {
+        if joined_indices.last() == Some(&index) {
+            groups.last_mut().unwrap().extend(edges);
+        } else {
+            joined_indices.push(index);
+            groups.push(edges);
+        }
+    }
+    let paths = groups
         .into_iter()
         .map(|edges| paths::merge(&edges, directed, &mut budget))
         .collect::<Result<_, _>>()?;
@@ -322,7 +351,7 @@ fn draw(
     Ok((
         Joined {
             paths,
-            indices: section_indices,
+            indices: joined_indices,
             residue_count: prepared.residue_count,
             warnings,
         },
@@ -495,7 +524,7 @@ impl RenderSession {
             center: math::V3,
             basis: [math::V3; 3],
             ribbons: Vec<SceneRibbon<'a>>,
-            molecules: Vec<Molecule>,
+            molecules: Vec<molecule::PreviewMolecule>,
         }
         let stride = prepared
             .ribbons

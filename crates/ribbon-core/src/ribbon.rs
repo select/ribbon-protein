@@ -165,7 +165,7 @@ pub(crate) fn project_ribbon(samples: &[Sample], camera: &Camera) -> Vec<Section
 pub(crate) fn track_count(
     sections: &[Vec<Section>],
     options: &RenderOptions,
-    molecular_lines: &[Option<usize>],
+    molecular_lines: &[Option<crate::molecule::Profile>],
 ) -> Result<usize, RenderError> {
     let max_loop_width = sections
         .iter()
@@ -196,7 +196,7 @@ pub(crate) fn track_count(
                         .get(i)
                         .copied()
                         .flatten()
-                        .map_or(count, |lines| lines + 2)
+                        .map_or(count, |profile| profile.tracks().max(1))
                 }
         })
         .sum();
@@ -265,9 +265,19 @@ mod tests {
             ..RenderOptions::default()
         };
         let sections = vec![vec![section(0.0, 1.0, 0.0), section(1.0, 1.0, 0.0)]; 45_455];
-        assert!(track_count(&sections, &o, &vec![Some(20); sections.len()]).is_err());
+        assert!(track_count(
+            &sections,
+            &o,
+            &vec![Some(crate::molecule::Profile::Band(20)); sections.len()]
+        )
+        .is_err());
         assert_eq!(
-            track_count(&sections, &o, &vec![Some(0); sections.len()]).unwrap(),
+            track_count(
+                &sections,
+                &o,
+                &vec![Some(crate::molecule::Profile::Band(0)); sections.len()]
+            )
+            .unwrap(),
             2
         );
     }

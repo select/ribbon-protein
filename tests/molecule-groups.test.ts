@@ -48,12 +48,12 @@ describe("molecule group controls", () => {
   it("keeps each group drawing style independent and validates hidden groups", () => {
     const o = defaultRenderOptions();
     o.selectedChains = ["A"];
-    expect(o.moleculeStyles.lipid).toEqual({ lines: 3, bondWidthAngstrom: 1.2 });
+    expect(o.moleculeStyles.lipid).toEqual({ lines: 0, bondWidthAngstrom: 0.4 });
     o.moleculeStyles.lipid.lines = 8;
     o.moleculeStyles.lipid.bondWidthAngstrom = 2;
     expect(o.lines).toBe(7);
     expect(o.moleculeStyles.molecule).toEqual({ lines: 1, bondWidthAngstrom: 0.5 });
-    expect(defaultRenderOptions().moleculeStyles.lipid.lines).toBe(3);
+    expect(defaultRenderOptions().moleculeStyles.lipid.lines).toBe(0);
     for (const lines of [-1, 1.5, 21, NaN]) {
       o.moleculeStyles.water.lines = lines;
       expect(() => validateOptions(o, mixed)).toThrow(/water interior lines/);
@@ -66,13 +66,16 @@ describe("molecule group controls", () => {
   });
   it("reserves the thicker lipid stroke in page fitting only when lipids are selected", () => {
     const o = defaultRenderOptions();
-    expect(o.lipidWidthMm).toBe(0.8);
+    expect(o.penWidthMm).toBe(0.4);
+    expect(o.lipidWidthMm).toBe(o.penWidthMm);
     o.selectedChains = ["A"];
-    expect(drawingPenWidth(o, mixed)).toBe(0.25);
+    expect(drawingPenWidth(o, mixed)).toBe(0.4);
     o.selectedChains.push("l1");
-    expect(drawingPenWidth(o, mixed)).toBe(0.8);
+    expect(drawingPenWidth(o, mixed)).toBe(0.4);
     o.lipidWidthMm = 1.2;
     expect(drawingPenWidth(o, mixed)).toBe(1.2);
+    o.selectedChains = ["A"];
+    expect(drawingPenWidth(o, mixed)).toBe(0.4);
     o.lipidWidthMm = 0;
     expect(() => validateOptions(o, mixed)).toThrow(/Lipid stroke width/);
   });
