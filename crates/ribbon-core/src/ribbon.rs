@@ -182,8 +182,18 @@ pub(crate) fn track_count(
             "Loop fill exceeds 256 tracks; increase loopSpacingMm or reduce page dimensions",
         );
     }
-    let panels: usize = sections.iter().map(|s| s.len() - 1).sum();
-    if panels.saturating_mul(count) > MAX_EDGES {
+    let panels: usize = sections
+        .iter()
+        .map(|s| {
+            (s.len() - 1)
+                * if s.iter().all(|v| v.left == v.right) {
+                    1
+                } else {
+                    count
+                }
+        })
+        .sum();
+    if panels > MAX_EDGES {
         return fail(
             "Drawing exceeds 1000000 track segments; reduce samples, loop density, or input size",
         );

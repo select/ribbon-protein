@@ -3,7 +3,8 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { parseStructure } from "../app/lib/parser";
 import { validateSvg } from "../app/lib/exports";
 import { defaultRenderOptions } from "../app/types/render";
-import type { RenderResult } from "../app/types/render";
+import type { RenderResult, PreviewScene } from "../app/types/render";
+import { renderInteractionPreview } from "../app/lib/interaction-preview";
 
 const moduleUrl = new URL("../public/wasm/ribbon_core.js", import.meta.url);
 const available = await access(moduleUrl).then(
@@ -28,6 +29,51 @@ describe.skipIf(!available)(
       });
       renderJson = wasm.render_json;
       Session = wasm.RenderSession;
+    });
+    it("renders a real lipid alone and with protein, including color/selection caches and drag previews", async () => {
+      const lipid = await parseStructure(
+        await readFile(new URL("./fixtures/6baj-lipid.cif", import.meta.url), "utf8"),
+        "lipid.cif",
+      );
+      const protein = await parseStructure(
+        await readFile(new URL("../public/examples/1crn-backbone.pdb", import.meta.url), "utf8"),
+        "protein.pdb",
+      );
+      for (const structure of [
+        lipid,
+        { ...protein, molecules: lipid.molecules, chains: [...protein.chains, ...lipid.chains] },
+      ]) {
+        const options = defaultRenderOptions();
+        const session = new Session(JSON.stringify(structure));
+        try {
+          for (const selected of [lipid.chains, structure.chains, []]) {
+            options.selectedChains = selected.map((c) => c.id);
+            options.chainColors = { [lipid.chains[0]!.id]: "#2f7d4a" };
+            options.rotation = [20, 30, 10];
+            const first = JSON.parse(session.render_options_json(JSON.stringify(options), false));
+            expect(first.result).toEqual(
+              JSON.parse(renderJson(JSON.stringify({ structure, options }))),
+            );
+            validateSvg(first.result.svg);
+            expect(first.result.strokeCount > 0).toBe(selected.length > 0);
+            const scene = JSON.parse(session.preview_scene_json()) as PreviewScene;
+            expect(scene.molecules?.length).toBe(selected.length ? 1 : 0);
+            const drag = renderInteractionPreview(scene, options);
+            expect(drag.svg).not.toMatch(/NaN|Infinity/);
+            expect(drag.strokeCount > 0).toBe(selected.length > 0);
+            options.chainColors[lipid.chains[0]!.id] = "red";
+            const recolored = JSON.parse(
+              session.render_options_json(JSON.stringify(options), false),
+            );
+            expect(recolored.timings.pathCacheHit).toBe(true);
+            expect(recolored.result).toEqual(
+              JSON.parse(renderJson(JSON.stringify({ structure, options }))),
+            );
+          }
+        } finally {
+          session.free();
+        }
+      }
     });
     it.each(["1ezg-backbone.pdb", "1mbn-backbone.pdb"])(
       "retains scientific %s geometry with exact stateful/stateless cache parity",

@@ -39,6 +39,28 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe("useRibbon reactive runtime", () => {
+  it("selects molecular components and protein initially but leaves water hidden", async () => {
+    const h = harness();
+    h.runtime.parse.mockResolvedValueOnce({
+      ...structure,
+      chains: [
+        ...structure.chains,
+        { id: "lipid", residueCount: 0 },
+        { id: "water", residueCount: 0 },
+      ],
+      molecules: [
+        { chainId: "lipid", label: "lipid", category: "molecule", atoms: [[0, 0, 0]], bonds: [] },
+        { chainId: "water", label: "HOH", category: "water", atoms: [[1, 0, 0]], bonds: [] },
+      ],
+    });
+    await h.studio.loadFile(file());
+    expect(h.studio.options.selectedChains).toEqual(["A", "lipid"]);
+    expect(h.runtime.render.mock.calls[0]![0].options.selectedChains).toEqual(["A", "lipid"]);
+    h.studio.options.selectedChains.push("water");
+    await vi.advanceTimersByTimeAsync(180);
+    expect(h.runtime.render.mock.calls.at(-1)![0].options.selectedChains).toContain("water");
+    h.dispose();
+  });
   it("loads all chains explicitly, debounces direct edits and marks exports stale immediately", async () => {
     const h = harness();
     await h.studio.loadFile(file());

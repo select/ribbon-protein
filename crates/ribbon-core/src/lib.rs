@@ -6,6 +6,7 @@
 mod clip;
 mod math;
 mod model;
+mod molecule;
 mod paths;
 mod ribbon;
 
@@ -60,6 +61,13 @@ struct Joined {
     warnings: Vec<String>,
 }
 
+fn component_id(structure: &StructureData, index: usize) -> &str {
+    if index < structure.segments.len() {
+        &structure.segments[index].chain_id
+    } else {
+        &structure.molecules[index - structure.segments.len()].chain_id
+    }
+}
 fn selected_indices(request: &RenderRequest) -> Vec<usize> {
     let selected: HashSet<&str> = request
         .options
@@ -67,13 +75,8 @@ fn selected_indices(request: &RenderRequest) -> Vec<usize> {
         .iter()
         .map(String::as_str)
         .collect();
-    request
-        .structure
-        .segments
-        .iter()
-        .enumerate()
-        .filter(|(_, s)| selected.contains(s.chain_id.as_str()))
-        .map(|(i, _)| i)
+    (0..request.structure.segments.len() + request.structure.molecules.len())
+        .filter(|&i| selected.contains(component_id(&request.structure, i)))
         .collect()
 }
 fn prepare(request: &RenderRequest) -> Prepared {
@@ -83,18 +86,24 @@ fn prepare(request: &RenderRequest) -> Prepared {
     let mut residue_count = 0;
     let ribbons: Vec<_> = indices
         .iter()
-        .map(|&i| {
-            let segment = &request.structure.segments[i];
+        .filter_map(|&i| {
+            let segment = request.structure.segments.get(i)?;
             residue_count += segment.residues.len();
             let (samples, fallback) = ribbon::make_ribbon(segment, request.options.samples);
             fallback_used |= fallback;
-            samples
+            Some(samples)
         })
         .collect();
     if fallback_used {
         warnings.push("Some carbonyl directions are parallel to the backbone; stable transported fallback frames were used.".into());
     }
-    let all_points: Vec<_> = ribbons.iter().flatten().map(|s| s.point).collect();
+    let mut all_points: Vec<_> = ribbons.iter().flatten().map(|s| s.point).collect();
+    for &i in &indices {
+        if i >= request.structure.segments.len() {
+            all_points
+                .extend(&request.structure.molecules[i - request.structure.segments.len()].atoms);
+        }
+    }
     let camera = if all_points.is_empty() {
         math::Camera {
             center: [0.0; 3],
@@ -202,23 +211,42 @@ fn draw(
             }
         })
         .collect();
+    let mut section_indices: Vec<_> = prepared
+        .indices
+        .iter()
+        .copied()
+        .filter(|&i| i < request.structure.segments.len())
+        .collect();
+    for &index in &prepared.indices {
+        if index < request.structure.segments.len() {
+            continue;
+        }
+        let paths = molecule::project(
+            &request.structure.molecules[index - request.structure.segments.len()],
+            &camera,
+        );
+        section_indices.extend(std::iter::repeat_n(index, paths.len()));
+        sections.extend(paths);
+    }
     fit_page(&mut sections, o)?;
     timings.project_ms = now() - started;
     if preview {
-        warnings.push("Interaction preview: ribbon outlines only, without hidden-line removal. Refine before exporting.".into());
+        warnings.push("Interaction preview: ribbon outlines and molecular bonds, without hidden-line removal. Refine before exporting.".into());
         let paths = sections
             .iter()
             .map(|s| {
-                vec![
-                    s.iter().map(|v| v.left).collect(),
-                    s.iter().map(|v| v.right).collect(),
-                ]
+                let left = s.iter().map(|v| v.left).collect();
+                if s.iter().all(|v| v.left == v.right) {
+                    vec![left]
+                } else {
+                    vec![left, s.iter().map(|v| v.right).collect()]
+                }
             })
             .collect();
         return Ok((
             Joined {
                 paths,
-                indices: prepared.indices.clone(),
+                indices: section_indices.clone(),
                 residue_count: prepared.residue_count,
                 warnings,
             },
@@ -248,7 +276,7 @@ fn draw(
             });
         }
     }
-    let visible = clip::visible_edges(&mut panels, prepared.indices.len(), tracks, o)?;
+    let visible = clip::visible_edges(&mut panels, section_indices.len(), tracks, o)?;
     timings.clip_ms = now() - started;
     let started = now();
     let mut budget = paths::Budget::default();
@@ -261,7 +289,7 @@ fn draw(
     Ok((
         Joined {
             paths,
-            indices: prepared.indices.clone(),
+            indices: section_indices,
             residue_count: prepared.residue_count,
             warnings,
         },
@@ -276,7 +304,7 @@ fn finish(request: &RenderRequest, joined: &Joined) -> Result<RenderResult, Rend
     for (&index, paths) in joined.indices.iter().zip(&joined.paths) {
         let color = o
             .chain_colors
-            .get(&request.structure.segments[index].chain_id)
+            .get(component_id(&request.structure, index))
             .map(String::as_str)
             .unwrap_or("black");
         colors
@@ -368,7 +396,7 @@ impl RenderSession {
                         .request
                         .options
                         .chain_colors
-                        .get(&self.request.structure.segments[index].chain_id)
+                        .get(component_id(&self.request.structure, index))
                         .cloned()
                         .unwrap_or_else(|| "black".into());
                     colors
@@ -434,6 +462,7 @@ impl RenderSession {
             center: math::V3,
             basis: [math::V3; 3],
             ribbons: Vec<SceneRibbon<'a>>,
+            molecules: Vec<Molecule>,
         }
         let stride = prepared
             .ribbons
@@ -445,6 +474,7 @@ impl RenderSession {
         let ribbons = prepared
             .indices
             .iter()
+            .filter(|&&index| index < self.request.structure.segments.len())
             .zip(&prepared.ribbons)
             .map(|(&index, samples)| {
                 let mut sparse: Vec<_> = samples.iter().step_by(stride).collect();
@@ -461,6 +491,17 @@ impl RenderSession {
             center: prepared.camera.center,
             basis: prepared.camera.basis,
             ribbons,
+            molecules: molecule::preview(
+                &prepared
+                    .indices
+                    .iter()
+                    .filter_map(|&index| {
+                        index
+                            .checked_sub(self.request.structure.segments.len())
+                            .map(|i| &self.request.structure.molecules[i])
+                    })
+                    .collect::<Vec<_>>(),
+            ),
         })
         .map_err(|e| e.to_string())
     }

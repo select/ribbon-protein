@@ -10,9 +10,20 @@ export interface BackboneSegment {
   chainId: string;
   residues: BackboneResidue[];
 }
+export type MoleculeCategory = "molecule" | "nucleic" | "water" | "ion";
+export interface Molecule {
+  /** Selection/color ID; distinct from original protein chain IDs. */
+  chainId: string;
+  label: string;
+  category: MoleculeCategory;
+  atoms: Vec3[];
+  /** Heavy-atom covalent bonds; one line per bond, irrespective of order. */
+  bonds: [number, number][];
+}
 export interface StructureData {
   name: string;
   segments: BackboneSegment[];
+  molecules?: Molecule[];
   chains: { id: string; residueCount: number }[];
   residueCount: number;
   warnings: string[];
@@ -42,6 +53,7 @@ export interface RenderRequest {
 export interface PreviewScene {
   center: Vec3;
   basis: [Vec3, Vec3, Vec3];
+  molecules?: Molecule[];
   ribbons: {
     chainId: string;
     samples: { point: Vec3; side: Vec3; width: number; alpha: number }[];

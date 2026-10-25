@@ -37,9 +37,21 @@ pub struct Chain {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Molecule {
+    pub chain_id: String,
+    pub label: String,
+    pub category: String,
+    pub atoms: Vec<Vec3>,
+    pub bonds: Vec<[usize; 2]>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StructureData {
     pub name: String,
     pub segments: Vec<BackboneSegment>,
+    #[serde(default)]
+    pub molecules: Vec<Molecule>,
     pub chains: Vec<Chain>,
     pub residue_count: usize,
     pub warnings: Vec<String>,
@@ -257,6 +269,53 @@ impl RenderRequest {
                         return fail(format!("Segment {index}, residue {i}: duplicate CA or gap >4.5 Å; split incomplete backbones before rendering"));
                     }
                 }
+            }
+        }
+        let mut atoms = 0usize;
+        let mut bonds = 0usize;
+        let mut molecular_ids = HashSet::new();
+        let mut wire_edges = 0usize;
+        for molecule in &s.molecules {
+            if !ids.contains(molecule.chain_id.as_str())
+                || !molecular_ids.insert(molecule.chain_id.as_str())
+                || s.segments.iter().any(|s| s.chain_id == molecule.chain_id)
+                || molecule.label.len() > 512
+                || !["molecule", "nucleic", "water", "ion"].contains(&molecule.category.as_str())
+                || molecule.atoms.is_empty()
+            {
+                return fail("Molecules need distinct known component IDs, bounded labels, categories and atoms");
+            }
+            atoms = atoms.saturating_add(molecule.atoms.len());
+            bonds = bonds.saturating_add(molecule.bonds.len());
+            if atoms > 250_000 || bonds > 250_000 {
+                return fail("Molecular geometry exceeds 250000 atoms or bonds");
+            }
+            if molecule
+                .atoms
+                .iter()
+                .flatten()
+                .any(|v| !bounded(*v, -1e6, 1e6))
+            {
+                return fail(
+                    "Molecular coordinates must be finite and within +/-1000000 angstroms",
+                );
+            }
+            let mut pairs = HashSet::new();
+            let mut connected = vec![false; molecule.atoms.len()];
+            for &[a, b] in &molecule.bonds {
+                if a >= molecule.atoms.len()
+                    || b >= molecule.atoms.len()
+                    || a == b
+                    || !pairs.insert((a.min(b), a.max(b)))
+                {
+                    return fail("Molecular bonds need unique, distinct, in-range atom indices");
+                }
+                connected[a] = true;
+                connected[b] = true;
+            }
+            wire_edges += molecule.bonds.len() + 16 * connected.iter().filter(|&&v| !v).count();
+            if wire_edges > MAX_EDGES {
+                return fail("Molecular outlines exceed 1000000 edges; export fewer components");
             }
         }
         if s.residue_count > MAX_RESIDUES {

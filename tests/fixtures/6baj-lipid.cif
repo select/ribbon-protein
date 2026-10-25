@@ -1,0 +1,230 @@
+data_6baj_lipid
+# Public source: https://files.rcsb.org/download/6BAJ.cif
+# PTY, author chain A residue 1101. Original coordinates, 50 heavy atoms.
+# Extracted for parser/render regression; no atoms reconstructed.
+loop_
+_entity.id
+_entity.type
+2 non-polymer
+#
+loop_
+_chem_comp.id
+_chem_comp.type
+_chem_comp.mon_nstd_flag
+_chem_comp.name
+_chem_comp.pdbx_synonyms
+_chem_comp.formula
+_chem_comp.formula_weight
+PTY non-polymer         . PHOSPHATIDYLETHANOLAMINE ? 'C40 H80 N O8 P' 734.039
+#
+loop_
+_chem_comp_bond.comp_id
+_chem_comp_bond.atom_id_1
+_chem_comp_bond.atom_id_2
+_chem_comp_bond.value_order
+_chem_comp_bond.pdbx_aromatic_flag
+_chem_comp_bond.pdbx_stereo_config
+_chem_comp_bond.pdbx_ordinal
+PTY C1  O4   sing N N 314
+PTY C1  C6   sing N N 315
+PTY C1  HC11 sing N N 316
+PTY C1  HC12 sing N N 317
+PTY C2  C3   sing N N 318
+PTY C2  N1   sing N N 319
+PTY C2  HC21 sing N N 320
+PTY C2  HC22 sing N N 321
+PTY C3  O11  sing N N 322
+PTY C3  HC31 sing N N 323
+PTY C3  HC32 sing N N 324
+PTY O4  C30  sing N N 325
+PTY C5  C6   sing N N 326
+PTY C5  O14  sing N N 327
+PTY C5  HC51 sing N N 328
+PTY C5  HC52 sing N N 329
+PTY C6  O7   sing N N 330
+PTY C6  HC6  sing N N 331
+PTY O7  C8   sing N N 332
+PTY C8  O10  doub N N 333
+PTY C8  C11  sing N N 334
+PTY C11 C12  sing N N 335
+PTY C11 H111 sing N N 336
+PTY C11 H112 sing N N 337
+PTY C12 C13  sing N N 338
+PTY C12 H121 sing N N 339
+PTY C12 H122 sing N N 340
+PTY C13 C14  sing N N 341
+PTY C13 H131 sing N N 342
+PTY C13 H132 sing N N 343
+PTY C14 C15  sing N N 344
+PTY C14 H141 sing N N 345
+PTY C14 H142 sing N N 346
+PTY C15 C16  sing N N 347
+PTY C15 H151 sing N N 348
+PTY C15 H152 sing N N 349
+PTY C16 C17  sing N N 350
+PTY C16 H161 sing N N 351
+PTY C16 H162 sing N N 352
+PTY C17 C18  sing N N 353
+PTY C17 H171 sing N N 354
+PTY C17 H172 sing N N 355
+PTY C18 C19  sing N N 356
+PTY C18 H181 sing N N 357
+PTY C18 H182 sing N N 358
+PTY C19 C20  sing N N 359
+PTY C19 H191 sing N N 360
+PTY C19 H192 sing N N 361
+PTY C20 C21  sing N N 362
+PTY C20 H201 sing N N 363
+PTY C20 H202 sing N N 364
+PTY C21 C22  sing N N 365
+PTY C21 H211 sing N N 366
+PTY C21 H212 sing N N 367
+PTY C22 C23  sing N N 368
+PTY C22 H221 sing N N 369
+PTY C22 H222 sing N N 370
+PTY C23 C24  sing N N 371
+PTY C23 H231 sing N N 372
+PTY C23 H232 sing N N 373
+PTY C24 C25  sing N N 374
+PTY C24 H241 sing N N 375
+PTY C24 H242 sing N N 376
+PTY C25 C26  sing N N 377
+PTY C25 H251 sing N N 378
+PTY C25 H252 sing N N 379
+PTY C26 C27  sing N N 380
+PTY C26 H261 sing N N 381
+PTY C26 H262 sing N N 382
+PTY C27 C28  sing N N 383
+PTY C27 H271 sing N N 384
+PTY C27 H272 sing N N 385
+PTY C28 C29  sing N N 386
+PTY C28 H281 sing N N 387
+PTY C28 H282 sing N N 388
+PTY C29 H291 sing N N 389
+PTY C29 H292 sing N N 390
+PTY C29 H293 sing N N 391
+PTY C30 C31  sing N N 392
+PTY C30 O30  doub N N 393
+PTY C31 C32  sing N N 394
+PTY C31 H311 sing N N 395
+PTY C31 H312 sing N N 396
+PTY C32 C33  sing N N 397
+PTY C32 H321 sing N N 398
+PTY C32 H322 sing N N 399
+PTY C33 C34  sing N N 400
+PTY C33 H331 sing N N 401
+PTY C33 H332 sing N N 402
+PTY C34 C35  sing N N 403
+PTY C34 H341 sing N N 404
+PTY C34 H342 sing N N 405
+PTY C35 C36  sing N N 406
+PTY C35 H351 sing N N 407
+PTY C35 H352 sing N N 408
+PTY C36 C37  sing N N 409
+PTY C36 H361 sing N N 410
+PTY C36 H362 sing N N 411
+PTY C37 C38  sing N N 412
+PTY C37 H371 sing N N 413
+PTY C37 H372 sing N N 414
+PTY C38 C39  sing N N 415
+PTY C38 H381 sing N N 416
+PTY C38 H382 sing N N 417
+PTY C39 C40  sing N N 418
+PTY C39 H391 sing N N 419
+PTY C39 H392 sing N N 420
+PTY C40 C41  sing N N 421
+PTY C40 H401 sing N N 422
+PTY C40 H402 sing N N 423
+PTY C41 C42  sing N N 424
+PTY C41 H411 sing N N 425
+PTY C41 H412 sing N N 426
+PTY C42 C43  sing N N 427
+PTY C42 H421 sing N N 428
+PTY C42 H422 sing N N 429
+PTY C43 C44  sing N N 430
+PTY C43 H431 sing N N 431
+PTY C43 H432 sing N N 432
+PTY C44 H441 sing N N 433
+PTY C44 H442 sing N N 434
+PTY C44 H443 sing N N 435
+PTY P1  O11  sing N N 436
+PTY P1  O12  sing N N 437
+PTY P1  O13  doub N N 438
+PTY P1  O14  sing N N 439
+PTY O12 H12O sing N N 440
+PTY N1  HN11 sing N N 441
+PTY N1  HN12 sing N N 442
+#
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_entity_id
+_atom_site.label_seq_id
+_atom_site.pdbx_PDB_ins_code
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
+_atom_site.B_iso_or_equiv
+_atom_site.pdbx_formal_charge
+_atom_site.auth_seq_id
+_atom_site.auth_comp_id
+_atom_site.auth_asym_id
+_atom_site.auth_atom_id
+_atom_site.pdbx_PDB_model_num
+HETATM 23909 C C1  . PTY IA 2 .    ? 86.932  83.763  67.872  1.00 103.72 ?  1101 PTY A C1  1
+HETATM 23910 C C2  . PTY IA 2 .    ? 89.789  84.497  60.300  1.00 103.72 ?  1101 PTY A C2  1
+HETATM 23911 C C3  . PTY IA 2 .    ? 88.564  83.764  60.838  1.00 103.72 ?  1101 PTY A C3  1
+HETATM 23912 O O4  . PTY IA 2 .    ? 87.288  83.440  69.185  1.00 103.72 ?  1101 PTY A O4  1
+HETATM 23913 C C5  . PTY IA 2 .    ? 86.688  82.850  65.578  1.00 103.72 ?  1101 PTY A C5  1
+HETATM 23914 C C6  . PTY IA 2 .    ? 87.391  82.658  66.920  1.00 103.72 ?  1101 PTY A C6  1
+HETATM 23915 O O7  . PTY IA 2 .    ? 87.096  81.401  67.478  1.00 103.72 ?  1101 PTY A O7  1
+HETATM 23916 C C8  . PTY IA 2 .    ? 87.991  80.357  67.178  1.00 103.72 ?  1101 PTY A C8  1
+HETATM 23917 O O10 . PTY IA 2 .    ? 88.048  79.923  66.076  1.00 103.72 ?  1101 PTY A O10 1
+HETATM 23918 C C11 . PTY IA 2 .    ? 88.899  79.742  68.251  1.00 103.72 ?  1101 PTY A C11 1
+HETATM 23919 C C12 . PTY IA 2 .    ? 88.848  80.527  69.561  1.00 103.72 ?  1101 PTY A C12 1
+HETATM 23920 C C13 . PTY IA 2 .    ? 90.006  80.120  70.469  1.00 103.72 ?  1101 PTY A C13 1
+HETATM 23921 C C14 . PTY IA 2 .    ? 90.239  81.225  71.496  1.00 103.72 ?  1101 PTY A C14 1
+HETATM 23922 C C15 . PTY IA 2 .    ? 90.206  80.622  72.898  1.00 103.72 ?  1101 PTY A C15 1
+HETATM 23923 C C16 . PTY IA 2 .    ? 90.938  81.543  73.871  1.00 103.72 ?  1101 PTY A C16 1
+HETATM 23924 C C17 . PTY IA 2 .    ? 90.027  81.849  75.058  1.00 103.72 ?  1101 PTY A C17 1
+HETATM 23925 C C18 . PTY IA 2 .    ? 90.815  82.608  76.123  1.00 103.72 ?  1101 PTY A C18 1
+HETATM 23926 C C19 . PTY IA 2 .    ? 89.867  83.167  77.184  1.00 103.72 ?  1101 PTY A C19 1
+HETATM 23927 C C20 . PTY IA 2 .    ? 89.413  82.043  78.116  1.00 103.72 ?  1101 PTY A C20 1
+HETATM 23928 C C21 . PTY IA 2 .    ? 89.207  82.588  79.530  1.00 103.72 ?  1101 PTY A C21 1
+HETATM 23929 C C22 . PTY IA 2 .    ? 89.333  81.449  80.541  1.00 103.72 ?  1101 PTY A C22 1
+HETATM 23930 C C23 . PTY IA 2 .    ? 89.326  82.009  81.964  1.00 103.72 ?  1101 PTY A C23 1
+HETATM 23931 C C24 . PTY IA 2 .    ? 90.349  81.253  82.811  1.00 103.72 ?  1101 PTY A C24 1
+HETATM 23932 C C25 . PTY IA 2 .    ? 90.144  81.586  84.288  1.00 103.72 ?  1101 PTY A C25 1
+HETATM 23933 C C26 . PTY IA 2 .    ? 91.278  80.984  85.117  1.00 103.72 ?  1101 PTY A C26 1
+HETATM 23934 C C27 . PTY IA 2 .    ? 91.127  81.391  86.582  1.00 103.72 ?  1101 PTY A C27 1
+HETATM 23935 C C28 . PTY IA 2 .    ? 92.218  82.392  86.953  1.00 103.72 ?  1101 PTY A C28 1
+HETATM 23936 C C29 . PTY IA 2 .    ? 92.198  82.640  88.460  1.00 103.72 ?  1101 PTY A C29 1
+HETATM 23937 C C30 . PTY IA 2 .    ? 86.731  84.276  70.156  1.00 103.72 ?  1101 PTY A C30 1
+HETATM 23938 C C31 . PTY IA 2 .    ? 86.538  83.765  71.584  1.00 103.72 ?  1101 PTY A C31 1
+HETATM 23939 O O30 . PTY IA 2 .    ? 86.403  85.374  69.874  1.00 103.72 ?  1101 PTY A O30 1
+HETATM 23940 C C32 . PTY IA 2 .    ? 85.994  84.886  72.468  1.00 103.72 ?  1101 PTY A C32 1
+HETATM 23941 C C33 . PTY IA 2 .    ? 85.886  84.394  73.910  1.00 103.72 ?  1101 PTY A C33 1
+HETATM 23942 C C34 . PTY IA 2 .    ? 86.056  85.569  74.873  1.00 103.72 ?  1101 PTY A C34 1
+HETATM 23943 C C35 . PTY IA 2 .    ? 86.503  85.038  76.232  1.00 103.72 ?  1101 PTY A C35 1
+HETATM 23944 C C36 . PTY IA 2 .    ? 87.445  86.035  76.904  1.00 103.72 ?  1101 PTY A C36 1
+HETATM 23945 C C37 . PTY IA 2 .    ? 86.692  86.811  77.979  1.00 103.72 ?  1101 PTY A C37 1
+HETATM 23946 C C38 . PTY IA 2 .    ? 87.555  86.908  79.234  1.00 103.72 ?  1101 PTY A C38 1
+HETATM 23947 C C39 . PTY IA 2 .    ? 86.664  86.756  80.463  1.00 103.72 ?  1101 PTY A C39 1
+HETATM 23948 C C40 . PTY IA 2 .    ? 86.918  87.889  81.454  1.00 103.72 ?  1101 PTY A C40 1
+HETATM 23949 C C41 . PTY IA 2 .    ? 85.621  88.186  82.204  1.00 103.72 ?  1101 PTY A C41 1
+HETATM 23950 C C42 . PTY IA 2 .    ? 85.855  88.131  83.712  1.00 103.72 ?  1101 PTY A C42 1
+HETATM 23951 C C43 . PTY IA 2 .    ? 84.621  88.664  84.438  1.00 103.72 ?  1101 PTY A C43 1
+HETATM 23952 C C44 . PTY IA 2 .    ? 84.685  88.266  85.910  1.00 103.72 ?  1101 PTY A C44 1
+HETATM 23953 P P1  . PTY IA 2 .    ? 87.258  83.396  63.080  1.00 103.72 ?  1101 PTY A P1  1
+HETATM 23954 O O11 . PTY IA 2 .    ? 88.645  83.668  62.231  1.00 103.72 ?  1101 PTY A O11 1
+HETATM 23955 O O12 . PTY IA 2 .    ? 86.395  82.409  62.330  1.00 103.72 ?  1101 PTY A O12 1
+HETATM 23956 O O13 . PTY IA 2 .    ? 86.504  84.692  63.255  1.00 103.72 ?  1101 PTY A O13 1
+HETATM 23957 O O14 . PTY IA 2 .    ? 87.638  82.774  64.557  1.00 103.72 ?  1101 PTY A O14 1
+HETATM 23958 N N1  . PTY IA 2 .    ? 89.965  84.172  58.896  1.00 103.72 ?  1101 PTY A N1  1
+#

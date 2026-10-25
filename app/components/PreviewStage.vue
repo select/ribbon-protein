@@ -211,7 +211,7 @@ onBeforeUnmount(() => {
     <div v-if="!hasStructure && !isLoading" class="empty">
       <div class="drop" :class="{ 'is-over': ui.isDragging }">
         <AppIcon name="ribbon" :size="28" :stroke-width="1.1" class="drop-mark" />
-        <h2 class="drop-title">Drop a protein structure</h2>
+        <h2 class="drop-title">Drop a molecular structure</h2>
         <p class="drop-text">
           PDB, ENT, CIF or mmCIF. Everything is parsed and drawn locally in your browser — nothing
           is uploaded.
@@ -290,7 +290,7 @@ onBeforeUnmount(() => {
       </svg>
 
       <div v-if="!svgUrl" class="sheet-note">
-        <template v-if="noChains">No chains selected</template>
+        <template v-if="noChains">No components selected</template>
         <template v-else-if="isRendering || isLoading">
           <span class="rs-spinner" />
           Drawing…

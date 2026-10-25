@@ -51,7 +51,7 @@ This selects the GitHub Pages preset and `/ribbon-protein/` base path, including
 ## Using the studio
 
 1. Choose or drop a `.cif`, `.mmcif`, `.pdb` or `.ent` file. **Load example** opens a small public crambin (1CRN) backbone bundled with the app, without contacting a molecular database.
-2. Select chains and optional per-chain pen colors.
+2. Select protein chains and non-protein components, with optional per-component pen colors. Category checkboxes toggle molecules, DNA/RNA/other polymers, single atoms and water; water is hidden initially.
 3. Choose paper, orientation and margin:
    - **A4:** 210 × 297 mm.
    - **A3:** 297 × 420 mm.
@@ -71,14 +71,19 @@ Pen width changes preview/export stroke width; your physical pen determines actu
 
 ## Calculation and limitations
 
-- First molecular model only. Original author chain IDs are preserved. Incomplete protein backbones, sequence/CA/peptide gaps and alternate conformers are handled explicitly. At least four complete residues are needed for a drawable fragment. Ligands, waters and biological-assembly expansion are not rendered.
+- First molecular model only. Original author chain IDs are preserved. Incomplete protein backbones, sequence/CA/peptide gaps and alternate conformers are handled explicitly. At least four complete residues are needed for a drawable fragment. Non-proteins (lipids, ligands, sugars, cofactors and nucleic acids) use heavy-atom covalent bond lines; atoms without a retained bond use small outline circles. Molecule-only files are supported. Water is optional and hidden initially; hydrogens are omitted. Biological-assembly expansion is not performed.
+- **Molecular connectivity stays local:** Mol* uses file-supplied connectivity/component definitions and local tables, with distance inference where unavailable. Each covalent bond is drawn as one line, not an order-specific chemical diagram; no element labels are added. Alternate conformers are selected coherently per residue by summed occupancy (lexical ties), retaining shared blank-alt atoms. Missing atoms are never reconstructed. Separate non-polymer residues are not joined, including covalent links between components; metal coordination and hydrogen bonds are not drawn. Bonds are hidden by protein ribbon panels, but wire molecules do not occlude other strokes. Molecular bond-search, atom/bond counts and outline work are bounded.
 - **Secondary structure uses local hydrogen-bond DSSP with Mol* stages**, computed from coordinates even without HELIX/SHEET annotations. Chemical residue identities (including proline), coherent conformers and peptide breaks are retained; all selected fragments share hydrogen-bond contacts, including inter-chain sheets. Original helix conventions are simplified as H/G/I → H and E/B → E. Incomplete backbones, unusual residue chemistry, helix boundaries and beta-bulge conventions can still differ between DSSP implementations. Computation failures are errors, never a silent all-loop fallback. See [assignment details and public reference comparisons](docs/web-dssp.md).
 - Rust handles ribbon smoothing, continuous loop/ribbon tracks, inset borders, projection, spatially indexed hidden-line trimming, stroke welding/joining, simplification and ordering. This is an artistic ribbon illustration, not a molecular surface renderer.
 - Visibility uses **average panel depth**, so intersecting or strongly twisted surfaces may have local occlusion artifacts. PCA orientation, full-precision geometry, page fitting and secondary-structure assignment all affect the final illustration.
 - Dragging uses bounded 3D contours without hidden-line removal; **Preview · exports paused** identifies this approximate view. Release computes the unchanged full-quality artwork (**Refining**). Discrete controls are debounced; obsolete requests are coalesced rather than restarting the worker. Exact rendering is not guaranteed realtime.
 - **Response** measures options/file-to-result latency, including debounce and queue wait; once the SVG loads it includes an approximate display delay. Hover for WASM-call and stage timings. It is not just Rust compute time or a hardware paint measurement.
-- Browser input limits: 20 MiB per file, 250,000 atoms, 10,000 residues and 512 backbone fragments (including contact-only fragments). The engine additionally caps spline samples, track count, clipping and path-processing work. Oversized drawings fail with a message instead of silently reducing quality. DSSP contact/ladder work is also bounded. Active browser jobs time out after two minutes; waiting in the single newest-request slot does not consume that timeout.
+- Browser input limits: 20 MiB per file, 250,000 atoms, 10,000 residues, 4,096 selectable components and 512 backbone fragments (including contact-only fragments). The engine additionally caps spline samples, track count, clipping and path-processing work. Oversized drawings fail with a message instead of silently reducing quality. DSSP contact/ladder work is also bounded. Active browser jobs time out after two minutes; waiting in the single newest-request slot does not consume that timeout.
 - No multi-structure alignment, G-code, file persistence or account system in this first version. Mol* remains available for future alignment features.
+
+### Protein + lipid example
+
+Download [6BAJ.cif from RCSB](https://files.rcsb.org/download/6BAJ.cif): the *E. coli* AcrB membrane-protein trimer includes 31 phosphatidylethanolamine (`PTY`) residues, 11 hydrocarbon (`D12`) residues and one water. Load the file locally; protein ribbons and molecular bond lines render together. Give the `PTY` components a contrasting pen color to reveal lipids in the transmembrane region. Many lipids are only partially modeled, so this is not a complete surrounding bilayer. The small `tests/fixtures/6baj-lipid.cif` regression fixture retains one lipid's original coordinates and component bond definitions, with provenance in its header.
 
 ## Repository layout
 

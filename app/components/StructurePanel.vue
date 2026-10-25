@@ -13,6 +13,20 @@ const PEN_SWATCHES = ["#191918", "#c4302b", "#1f5fbf", "#2f7d4a"];
 const busy = computed(() => studio.status === "loading");
 const chains = computed(() => studio.structure?.chains ?? []);
 const selected = computed(() => new Set(studio.options.selectedChains));
+const molecules = computed(() => new Map(studio.structure?.molecules?.map((m) => [m.chainId, m])));
+const categories = ["molecule", "nucleic", "ion", "water"] as const;
+function toggleCategory(category: string, on: boolean) {
+  const ids = new Set(
+    [...molecules.value.values()].filter((m) => m.category === category).map((m) => m.chainId),
+  );
+  studio.options.selectedChains = chains.value
+    .filter((c) => (ids.has(c.id) ? on : selected.value.has(c.id)))
+    .map((c) => c.id);
+}
+function categorySelected(category: string) {
+  const entries = [...molecules.value.values()].filter((m) => m.category === category);
+  return entries.length > 0 && entries.every((m) => selected.value.has(m.chainId));
+}
 const selectedCount = computed(
   () => chains.value.filter((chain) => selected.value.has(chain.id)).length,
 );
@@ -61,7 +75,7 @@ function cycleSwatch(id: string) {
 }
 
 function chainLabel(id: string): string {
-  return id.trim() === "" ? "(blank)" : id;
+  return molecules.value.get(id)?.label ?? (id.trim() === "" ? "(blank)" : id);
 }
 </script>
 
@@ -100,7 +114,7 @@ function chainLabel(id: string): string {
           <div class="file-meta">
             <span class="rs-num">{{ studio.structure.residueCount.toLocaleString() }}</span>
             residues · <span class="rs-num">{{ chains.length }}</span>
-            {{ chains.length === 1 ? "chain" : "chains" }}
+            {{ chains.length === 1 ? "component" : "components" }}
           </div>
         </div>
         <button type="button" class="rs-btn rs-btn--sm" :disabled="busy" @click="ui.pickFile()">
@@ -111,7 +125,7 @@ function chainLabel(id: string): string {
       <div v-if="chains.length" class="chains">
         <div class="chains-head">
           <span id="chains-label" class="rs-label">
-            Chains
+            Components
             <span class="count rs-num">{{ selectedCount }}/{{ chains.length }}</span>
           </span>
           <div class="chains-actions">
@@ -134,6 +148,25 @@ function chainLabel(id: string): string {
           </div>
         </div>
 
+        <div v-if="molecules.size" class="molecule-categories">
+          <template v-for="category in categories" :key="category">
+            <label v-if="[...molecules.values()].some((m) => m.category === category)">
+              <input
+                type="checkbox"
+                :checked="categorySelected(category)"
+                @change="toggleCategory(category, ($event.target as HTMLInputElement).checked)"
+              />
+              {{
+                {
+                  molecule: "Molecules",
+                  nucleic: "DNA/RNA / other polymers",
+                  ion: "Single atoms",
+                  water: "Water",
+                }[category]
+              }}
+            </label>
+          </template>
+        </div>
         <ul class="chain-list" aria-labelledby="chains-label">
           <li
             v-for="chain in chains"
@@ -148,8 +181,14 @@ function chainLabel(id: string): string {
                 :checked="selected.has(chain.id)"
                 @change="toggleChain(chain.id, ($event.target as HTMLInputElement).checked)"
               />
-              <span class="chain-id rs-num">{{ chainLabel(chain.id) }}</span>
-              <span class="chain-count">{{ chain.residueCount.toLocaleString() }} res</span>
+              <span class="chain-id rs-num" :title="chainLabel(chain.id)">{{
+                chainLabel(chain.id)
+              }}</span>
+              <span class="chain-count">{{
+                molecules.get(chain.id)
+                  ? `${molecules.get(chain.id)!.atoms.length} atoms`
+                  : `${chain.residueCount.toLocaleString()} res`
+              }}</span>
             </label>
             <div class="chain-color">
               <button
@@ -176,11 +215,14 @@ function chainLabel(id: string): string {
         </ul>
 
         <p v-if="selectedCount === 0" class="rs-hint warn" role="status">
-          No chains selected — select at least one chain to draw.
+          No components selected — select at least one component to draw.
         </p>
         <p v-else class="rs-hint">
-          {{ selectedResidues.toLocaleString() }} residues selected. Secondary structure uses local
-          hydrogen-bond DSSP (Mol*, original helix convention).
+          {{ selectedResidues.toLocaleString() }} protein residues selected (local DSSP).
+          <template v-if="molecules.size"
+            >Non-proteins: heavy-atom bond lines and isolated-atom circles. Water is hidden
+            initially; hydrogens are omitted.</template
+          >
         </p>
       </div>
     </template>
@@ -188,6 +230,18 @@ function chainLabel(id: string): string {
 </template>
 
 <style scoped>
+.molecule-categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  font-size: 12px;
+}
+.molecule-categories label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .intake {
   display: flex;
   flex-wrap: wrap;

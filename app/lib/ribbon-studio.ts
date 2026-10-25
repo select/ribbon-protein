@@ -184,7 +184,12 @@ export function createRibbonStudio(runtime: RibbonRuntime, env: StudioEnvironmen
     structure.value = next;
     fileName.value = name;
     quiet = true;
-    options.selectedChains = next.chains.map((chain) => chain.id);
+    const water = new Set(
+      next.molecules?.filter((m) => m.category === "water").map((m) => m.chainId),
+    );
+    options.selectedChains = next.chains
+      .filter((chain) => !water.has(chain.id))
+      .map((chain) => chain.id);
     options.chainColors = {};
     quiet = false;
     status.value = "idle";

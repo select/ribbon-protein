@@ -171,6 +171,9 @@ pub(crate) fn visible_edges(
         panels
             .iter()
             .enumerate()
+            // Molecular wires are not surfaces; indexing them would waste
+            // candidate tests without ever producing an occlusion interval.
+            .filter(|(_, p)| has_area(&p.corners()))
             .map(|(index, p)| IndexedPanel {
                 index,
                 envelope: envelope(&p.corners()),
@@ -181,8 +184,17 @@ pub(crate) fn visible_edges(
     let mut tests = 0usize;
     let mut pieces = 0usize;
     for (index, panel) in panels.iter().enumerate() {
-        let start = profile(&panel.start, tracks, options);
-        let end = profile(&panel.end, tracks, options);
+        let wire = panel.start.left == panel.start.right && panel.end.left == panel.end.right;
+        let start = if wire {
+            vec![panel.start.left]
+        } else {
+            profile(&panel.start, tracks, options)
+        };
+        let end = if wire {
+            vec![panel.end.left]
+        } else {
+            profile(&panel.end, tracks, options)
+        };
         let mut previous = None;
         for (a, b) in start.into_iter().zip(end) {
             let source = [a, b];
@@ -291,6 +303,63 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn molecular_wires_hide_behind_ribbons_but_do_not_occlude_front_ink() {
+        let section = |x, y, z| Section {
+            left: [x, y],
+            right: [x, y],
+            z,
+            alpha: 0.0,
+        };
+        let mut panels = vec![
+            Panel {
+                start: section(-2.0, 0.0, -1.0),
+                end: section(2.0, 0.0, -1.0),
+                segment: 0,
+                step: 0,
+            },
+            Panel {
+                start: section(-2.0, 0.0, 1.0),
+                end: section(2.0, 0.0, 1.0),
+                segment: 1,
+                step: 0,
+            },
+            Panel {
+                start: Section {
+                    left: [-1.0, -1.0],
+                    right: [-1.0, 1.0],
+                    z: 0.0,
+                    alpha: 0.0,
+                },
+                end: Section {
+                    left: [1.0, -1.0],
+                    right: [1.0, 1.0],
+                    z: 0.0,
+                    alpha: 0.0,
+                },
+                segment: 2,
+                step: 0,
+            },
+        ];
+        let groups = visible_edges(
+            &mut panels,
+            3,
+            3,
+            &RenderOptions {
+                lines: 1,
+                border_passes: 1,
+                ..RenderOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            groups[0],
+            vec![[[-2.0, 0.0], [-1.0, 0.0]], [[1.0, 0.0], [2.0, 0.0]]]
+        );
+        assert_eq!(groups[1], vec![[[-2.0, 0.0], [2.0, 0.0]]]);
+        assert_eq!(groups[2].len(), 3);
     }
 
     #[test]

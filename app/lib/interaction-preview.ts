@@ -75,6 +75,30 @@ export function renderInteractionPreview(scene: PreviewScene, o: RenderOptions):
     }
     return { chainId: ribbon.chainId, paths: [left, right] };
   });
+  for (const molecule of scene.molecules ?? []) {
+    const points: P2[] = molecule.atoms.map((atom) => {
+      const p = atom.map((v, i) => v - scene.center[i]!);
+      return [dot(basis[0], p), -dot(basis[1], p)];
+    });
+    const connected = new Set(molecule.bonds.flat());
+    const molecularPaths: P2[][] = molecule.bonds.map(([a, b]) => [points[a]!, points[b]!]);
+    points.forEach((p, i) => {
+      if (!connected.has(i))
+        molecularPaths.push(
+          Array.from({ length: 17 }, (_, step): P2 => {
+            const angle = (step * Math.PI * 2) / 16;
+            return [p[0] + 0.35 * Math.cos(angle), p[1] + 0.35 * Math.sin(angle)];
+          }),
+        );
+    });
+    for (const path of molecularPaths)
+      for (const p of path)
+        for (const j of [0, 1] as const) {
+          low[j] = Math.min(low[j], p[j]);
+          high[j] = Math.max(high[j], p[j]);
+        }
+    ribbons.push({ chainId: molecule.chainId, paths: molecularPaths });
+  }
   const span: P2 = [high[0] - low[0], high[1] - low[1]];
   const scale = Math.min(
     (o.widthMm - 2 * o.marginMm - o.penWidthMm) / Math.max(span[0], 1e-12),

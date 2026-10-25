@@ -8,6 +8,7 @@ import { SortedArray } from "molstar/lib/mol-data/int";
 import { computeBackboneDSSP } from "./dssp";
 import type { BackboneSegment, StructureData, Vec3 } from "../types/render";
 import { LIMITS, validateFile } from "./limits";
+import { readMolecules } from "./molecules";
 
 type Atoms = Record<"CA" | "C" | "O" | "N", Vec3> & { OXT?: Vec3 };
 interface SelectedSegment {
@@ -188,9 +189,9 @@ export async function parseStructure(text: string, name: string): Promise<Struct
   const h = model.atomicHierarchy;
   if (!h.atoms._rowCount) throw new Error("The file contains no atomic coordinates.");
   if (h.atoms._rowCount > LIMITS.atoms)
-    throw new Error("Too many atoms (limit 250,000). Export only the protein chains you need.");
+    throw new Error("Too many atoms (limit 250,000). Export only the components you need.");
   if (h.residues._rowCount > LIMITS.residues)
-    throw new Error("Too many residues (limit 10,000). Export a smaller protein.");
+    throw new Error("Too many residues (limit 10,000). Export a smaller structure.");
   const segments: SelectedSegment[] = [];
   let incomplete = 0,
     short = 0,
@@ -256,7 +257,8 @@ export async function parseStructure(text: string, name: string): Promise<Struct
     }
     flush();
   }
-  if (!segments.some((s) => s.atoms.length >= 4))
+  const molecules = readMolecules(model);
+  if (!segments.some((s) => s.atoms.length >= 4) && !molecules.length)
     throw new Error(
       "No drawable protein backbone. Need at least four consecutive residues with CA, C, O and N atoms, CA gaps ≤4.5 Å and peptide C–N gaps ≤2.5 Å.",
     );
@@ -264,7 +266,7 @@ export async function parseStructure(text: string, name: string): Promise<Struct
     throw new Error("Too many backbone fragments (limit 512). Choose a less fragmented protein.");
   let assigned: BackboneSegment[];
   try {
-    assigned = await assignSecondary(segments);
+    assigned = segments.length ? await assignSecondary(segments) : [];
   } catch (cause) {
     throw new Error(
       `Local secondary-structure computation failed: ${cause instanceof Error ? cause.message : String(cause)}. No loop-only fallback was used.`,
@@ -274,7 +276,11 @@ export async function parseStructure(text: string, name: string): Promise<Struct
   const counts = new Map<string, number>();
   for (const segment of assigned)
     counts.set(segment.chainId, (counts.get(segment.chainId) ?? 0) + segment.residues.length);
-  const warnings = [ASSIGNMENT_WARNING];
+  const warnings = assigned.length ? [ASSIGNMENT_WARNING] : [];
+  if (molecules.length)
+    warnings.push(
+      "Non-proteins use heavy-atom covalent bond lines (one line per bond); isolated atoms use outline circles. Connectivity uses local Mol* tables/file definitions with distance inference where unavailable. Missing atoms are not reconstructed; inter-component links and metal coordination are not drawn.",
+    );
   if (multiple) warnings.push("Only the first molecular model is used.");
   if (incomplete)
     warnings.push(
@@ -292,7 +298,11 @@ export async function parseStructure(text: string, name: string): Promise<Struct
   return {
     name,
     segments: assigned,
-    chains: [...counts].map(([id, residueCount]) => ({ id, residueCount })),
+    molecules,
+    chains: [
+      ...[...counts].map(([id, residueCount]) => ({ id, residueCount })),
+      ...molecules.map((m) => ({ id: m.chainId, residueCount: 0 })),
+    ],
     residueCount: [...counts.values()].reduce((a, b) => a + b, 0),
     warnings,
   };
