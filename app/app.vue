@@ -202,6 +202,37 @@ onBeforeUnmount(() => {
         <ViewPanel />
         <InkPanel />
         <AdvancedPanel />
+
+        <nav class="sidebar-links" aria-label="Project and inspiration">
+          <div class="link-row">
+            <a
+              href="https://select.github.io/ribbon-protein/"
+              target="_blank"
+              rel="noopener noreferrer"
+              >Live studio</a
+            >
+            <span aria-hidden="true">·</span>
+            <a
+              href="https://github.com/select/ribbon-protein"
+              target="_blank"
+              rel="noopener noreferrer"
+              >Source</a
+            >
+          </div>
+          <p>Inspired by Michael Fogleman</p>
+          <div class="link-row">
+            <a
+              href="https://www.michaelfogleman.com/plotter/"
+              target="_blank"
+              rel="noopener noreferrer"
+              >Plotter work</a
+            >
+            <span aria-hidden="true">·</span>
+            <a href="https://github.com/fogleman/ribbon" target="_blank" rel="noopener noreferrer"
+              >Original ribbon</a
+            >
+          </div>
+        </nav>
       </div>
 
       <p class="sidebar-foot">
@@ -316,6 +347,40 @@ onBeforeUnmount(() => {
   overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: rgba(55, 53, 47, 0.2) transparent;
+}
+
+.sidebar-links {
+  padding: 12px 16px;
+  border-top: 1px solid var(--rs-line);
+  font-size: 11.5px;
+  color: var(--rs-muted);
+}
+
+.sidebar-links p {
+  margin: 10px 0 2px;
+}
+
+.link-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sidebar-links a {
+  color: var(--rs-muted);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.sidebar-links a:hover {
+  color: var(--rs-ink-strong);
+}
+
+.sidebar-links a:focus-visible {
+  outline: 2px solid var(--rs-focus);
+  outline-offset: 3px;
+  border-radius: 2px;
 }
 
 .sidebar-foot {

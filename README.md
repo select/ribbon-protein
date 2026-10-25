@@ -2,6 +2,10 @@
 
 Turn local protein structures into editable, line-only SVG artwork for a pen plotter. A minimal **Nuxt 4 / Vue / UnoCSS** studio wraps a **Rust/WebAssembly** rendering engine.
 
+**[Open the live studio →](https://select.github.io/ribbon-protein/)** · [Source on GitHub](https://github.com/select/ribbon-protein)
+
+Inspired by Michael Fogleman's [plotter work](https://www.michaelfogleman.com/plotter/) and [original ribbon repository](https://github.com/fogleman/ribbon). This is a separate browser-based implementation, not his Go library.
+
 **Files stay in your browser.** Mol* parses coordinates and computes secondary structure locally; a Web Worker runs the Rust renderer. Nuxt/Nitro only serves the app and its assets—there is no upload or calculation endpoint.
 
 ## Run locally
@@ -24,7 +28,19 @@ pnpm build
 node .output/server/index.mjs
 ```
 
-Alternatively, `pnpm generate` creates a static app in `.output/public/`; serve that directory over HTTP(S). No Rust or Python runtime is needed on the hosting server. For a subdirectory deployment, set the same `NUXT_APP_BASE_URL` at build time and when running the Nitro server, for example `/studio/`.
+Alternatively, `pnpm generate` creates a static app in `.output/public/`; serve that directory over HTTP(S). No Rust runtime or calculation server is needed on the host. For a custom subdirectory deployment, set `NUXT_APP_BASE_URL` at build time (and when running a Nitro server), for example `/studio/`.
+
+### GitHub Pages
+
+The [Pages workflow](.github/workflows/deploy.yml) builds and deploys [the live studio](https://select.github.io/ribbon-protein/) on pushes to `main`, or manually via **Actions → Deploy to GitHub Pages → Run workflow**. Repository **Settings → Pages → Build and deployment → Source** must be **GitHub Actions**. It uses Node 24, the pinned pnpm lockfile and Rust/wasm-pack; generated assets are uploaded as a Pages artifact, never committed.
+
+To reproduce the Pages build:
+
+```bash
+GITHUB_PAGES=true pnpm generate
+```
+
+This selects the GitHub Pages preset and `/ribbon-protein/` base path, including the worker, examples and WASM assets. Local development still defaults to `/`. The artifact is `.output/public/`; serve it mounted at `/ribbon-protein/` to test locally.
 
 ## Using the studio
 
@@ -50,9 +66,9 @@ Pen width changes preview/export stroke width; your physical pen determines actu
 ## Calculation and limitations
 
 - First molecular model only. Original author chain IDs are preserved. Incomplete protein backbones, sequence/CA gaps and alternate conformers are handled explicitly. At least four complete residues are needed for a drawable fragment. Ligands, waters and biological-assembly expansion are not rendered.
-- **Secondary structure uses Mol* Zhang–Skolnick CA geometry, not MDTraj DSSP.** It is computed from coordinates even without HELIX/SHEET annotations, but helix/sheet boundaries and inter-chain sheets can differ from the Python reference. The UI exposes this warning; computation failures do not silently fall back to all loops.
-- Rust ports the custom ribbon smoothing, continuous loop/ribbon tracks, inset borders, projection, spatially indexed hidden-line trimming, stroke welding/joining, simplification and ordering. This is an artistic ribbon illustration, not a molecular surface renderer.
-- Visibility uses **average panel depth**, so intersecting or strongly twisted surfaces may have local occlusion artifacts. PCA sign choices, full-precision geometry, page fitting and secondary-structure differences mean output is not pixel- or byte-identical to Python.
+- **Secondary structure uses Mol* Zhang–Skolnick CA geometry, not hydrogen-bond DSSP.** It is computed from coordinates even without HELIX/SHEET annotations, but helix/sheet boundaries and inter-chain sheets can differ from DSSP assignments. The UI exposes this warning; computation failures do not silently fall back to all loops.
+- Rust handles ribbon smoothing, continuous loop/ribbon tracks, inset borders, projection, spatially indexed hidden-line trimming, stroke welding/joining, simplification and ordering. This is an artistic ribbon illustration, not a molecular surface renderer.
+- Visibility uses **average panel depth**, so intersecting or strongly twisted surfaces may have local occlusion artifacts. PCA orientation, full-precision geometry, page fitting and secondary-structure assignment all affect the final illustration.
 - Rendering is debounced rather than guaranteed realtime during dragging. The previous preview remains visible but marked stale during calculation.
 - Browser input limits: 20 MiB per file, 250,000 atoms, 10,000 residues and 512 drawable fragments. The engine additionally caps spline samples, track count, clipping and path-processing work. Oversized drawings fail with a message instead of silently reducing quality. Browser jobs time out after two minutes.
 - No multi-structure alignment, G-code, file persistence or account system in this first version. Mol* remains available for future alignment features.
@@ -67,12 +83,11 @@ public/templates/       Standalone preview-only coaster guide
 public/wasm/            Generated wasm-pack output (ignored)
 scripts/                WASM build, smoke check and fixture generation
 tests/                  Parser, lifecycle, export and real-WASM integration tests
-legacy/python/          Original renderer, batch tools and regression tests
 docs/                   Implementation plan and validation notes
 output/                 Existing local structures/renders (ignored, not moved)
 ```
 
-See [the implementation plan](docs/web-plan.md) for the architecture and milestone scope, and [validation notes](docs/web-validation.md) for verified checks and Python comparison results.
+See [the implementation plan](docs/web-plan.md) for the architecture and milestone scope, and [validation notes](docs/web-validation.md) for verified checks and rendering limitations.
 
 ## Checks and Git hooks
 
@@ -87,17 +102,6 @@ cargo test --workspace
 pnpm build
 ```
 
-Real-WASM Vitest cases require `pnpm build:wasm`; they are skipped if the generated module is absent. CI builds WASM before running them. Native tests include numerical comparisons with Python/SciPy and interval-clipping comparisons with Shapely, using small committed synthetic fixtures.
+Real-WASM Vitest cases require `pnpm build:wasm`; they are skipped if the generated module is absent. CI builds WASM before running them. Native tests cover spline interpolation, interval clipping, stroke continuity, physical dimensions and workload limits, using small committed synthetic fixtures.
 
 `simple-git-hooks` runs lint/format checks before commits and `commitlint` enforces Conventional Commits. Use `pnpm fmt` to format application/config files. Build artifacts, local structure bundles and secrets are ignored and must not be force-added.
-
-## Python reference
-
-The original implementation remains usable and independent of the original Go `fogleman/ribbon` library. From the repository root:
-
-```bash
-uv run legacy/python/render.py input.cif -o output/protein.svg
-.venv/bin/python -m unittest discover -s legacy/python -v
-```
-
-See [the original renderer documentation](legacy/python/README.md) for options. Prefix script paths in its older commands with `legacy/python/`. Keep running batch commands from the repository root so relative input/output paths still resolve. Python and its scientific dependencies are not needed by the web app.
