@@ -2,9 +2,12 @@
 
 ## Project
 
-This project renders protein structures into line-only SVG artwork using Python.
-See `README.md` for rendering commands, options, and limitations. Generated renders
-and local structure bundles are intentionally ignored by Git; do not force-add them.
+This project renders protein structures into line-only SVG artwork. The web app uses
+Nuxt/Vue/UnoCSS with a client-side Rust/WASM engine. The original Python implementation
+is kept in `legacy/python/` as a regression reference. See `README.md` and
+`docs/web-plan.md`. Generated renders, WASM build artifacts and local structure bundles
+are intentionally ignored by Git; do not force-add them. Never send user structures
+to a server for parsing or rendering.
 
 ## Git workflow
 
@@ -37,9 +40,9 @@ and local structure bundles are intentionally ignored by Git; do not force-add t
 Run the unit tests after changing Python behavior:
 
 ```bash
-uv run --with shapely python -m unittest -v
+uv run --with shapely python -m unittest discover -s legacy/python -v
 ```
 
-An existing environment can also be used with `.venv/bin/python -m unittest -v`
+An existing environment can also be used with `.venv/bin/python -m unittest discover -s legacy/python -v`
 when it contains the required dependencies. Some structure-loading tests require
 optional scientific dependencies; report skipped tests as well as failures.

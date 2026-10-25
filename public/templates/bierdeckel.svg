@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="93.14mm" height="93.14mm" viewBox="0 0 93.14 93.14">
+  <title>Single Bierdeckel guide</title>
+  <desc>Extracted from rect6 in axidraw-template-bierdeckel.svg supplied by the project owner. Original guide centerline: 92.739998 mm square, 10 mm corner radii, x/y 0.2 mm, 0.4 mm stroke. Rounded to 92.74 mm. Canvas includes the guide stroke. Preview reference only; excluded from protein SVG exports.</desc>
+  <rect x="0.2" y="0.2" width="92.74" height="92.74" rx="10" ry="10" fill="none" stroke="#0000ff" stroke-width="0.4"/>
+</svg>
