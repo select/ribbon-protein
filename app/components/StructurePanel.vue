@@ -3,7 +3,6 @@ import { computed, inject } from "vue";
 import type { Studio, StudioUi } from "../app.vue";
 import AppIcon from "./AppIcon.vue";
 import StudioSection from "./StudioSection.vue";
-import RangeField from "./RangeField.vue";
 import { moleculeGroups, selectMoleculeGroup, colorMoleculeGroup } from "../lib/molecule-groups";
 
 const studio = inject<Studio>("ribbon")!;
@@ -179,42 +178,6 @@ function chainLabel(id: string): string {
                 "
               />
             </div>
-            <details
-              v-if="group.ids.some((id) => molecules.get(id)!.bonds.length)"
-              :open="group.category === 'lipid'"
-              class="molecule-drawing"
-            >
-              <summary>{{ group.label }} drawing</summary>
-              <RangeField
-                v-model="studio.options.moleculeStyles[group.category].lines"
-                :label="`${group.label} interior lines`"
-                :min="0"
-                :max="20"
-                :step="1"
-              />
-              <RangeField
-                v-model="studio.options.moleculeStyles[group.category].bondWidthAngstrom"
-                :label="`${group.label} bond width`"
-                unit="Å"
-                :min="0"
-                :max="4"
-                :step="0.1"
-              />
-              <RangeField
-                v-if="group.category === 'lipid'"
-                v-model="studio.options.lipidWidthMm"
-                label="Lipid stroke"
-                unit="mm"
-                :min="0.1"
-                :max="2"
-                :step="0.05"
-              />
-              <p class="rs-hint">
-                Bond width sets the artistic band thickness. Above 0 Å, each bond has two outlines
-                plus the interior lines. At 0 Å, bonds are single wires. Protein line settings stay
-                separate.
-              </p>
-            </details>
           </div>
         </div>
         <ul class="chain-list" aria-labelledby="chains-label">
@@ -284,18 +247,6 @@ function chainLabel(id: string): string {
   display: grid;
   gap: 6px;
   font-size: 12px;
-}
-.molecule-drawing {
-  margin: 6px 0 8px;
-  padding: 8px;
-  border: 1px solid var(--rs-line);
-  border-radius: 4px;
-  display: grid;
-  gap: 6px;
-}
-.molecule-drawing summary {
-  cursor: pointer;
-  margin-bottom: 6px;
 }
 .molecule-group {
   display: flex;
