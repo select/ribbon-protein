@@ -1,0 +1,52 @@
+{
+  "name": "ribbon-studio",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm build:wasm && nuxt dev",
+    "dev:nuxt": "nuxt dev",
+    "build:wasm": "bash scripts/build-wasm.sh",
+    "build": "pnpm build:wasm && nuxt build",
+    "generate": "pnpm build:wasm && nuxt generate",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare",
+    "prepare": "simple-git-hooks",
+    "lint": "oxlint --config oxlintrc.json app tests scripts nuxt.config.ts uno.config.ts",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check",
+    "typecheck": "nuxt typecheck && tsc --noEmit -p tests/tsconfig.json",
+    "test": "vitest run --config tests/vitest.config.ts",
+    "test:watch": "vitest --config tests/vitest.config.ts",
+    "test:wasm": "node scripts/check-wasm.mjs",
+    "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "commitlint": "commitlint --edit"
+  },
+  "dependencies": {
+    "molstar": "5.11.0",
+    "nuxt": "4.4.5",
+    "vue": "3.5.34"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "21.0.1",
+    "@commitlint/config-conventional": "21.0.1",
+    "@iconify-json/lucide": "1.2.99",
+    "@types/node": "25.7.0",
+    "@unocss/nuxt": "66.6.8",
+    "@unocss/reset": "66.6.8",
+    "oxfmt": "0.53.0",
+    "oxlint": "1.64.0",
+    "simple-git-hooks": "2.13.1",
+    "typescript": "6.0.3",
+    "unocss": "66.6.8",
+    "vitest": "4.1.6",
+    "vue-tsc": "3.2.8"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "pnpm lint && pnpm fmt:check",
+    "commit-msg": "pnpm commitlint --edit $1"
+  },
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "packageManager": "pnpm@11.22.0"
+}

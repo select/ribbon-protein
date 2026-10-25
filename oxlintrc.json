@@ -1,0 +1,15 @@
+{
+  "plugins": ["typescript", "import"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn"
+  },
+  "rules": {
+    "no-debugger": "error",
+    "no-underscore-dangle": ["warn", { "allow": ["_rowCount"] }],
+    "eqeqeq": "error",
+    "no-var": "error",
+    "typescript/no-explicit-any": "warn"
+  },
+  "ignorePatterns": ["node_modules/**", ".nuxt/**", ".output/**", "public/wasm/**"]
+}

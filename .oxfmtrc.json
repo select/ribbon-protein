@@ -1,0 +1,17 @@
+{
+  "printWidth": 100,
+  "ignorePatterns": [
+    "node_modules/**",
+    ".nuxt/**",
+    ".output/**",
+    "public/wasm/**",
+    "target/**",
+    "crates/**",
+    "legacy/**",
+    "docs/**",
+    "README.md",
+    "AGENTS.md",
+    "pnpm-lock.yaml",
+    "public/templates/**"
+  ]
+}

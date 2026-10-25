@@ -12,6 +12,17 @@ htmlcov/
 /blender_message_top40/
 /blender_message_top40.zip
 
+# Web dependencies, build output and generated WASM
+node_modules/
+.nuxt/
+.output/
+/dist
+/coverage/
+/target/
+/public/wasm/
+*.tsbuildinfo
+*.log
+
 # Local secrets and operating-system files
 .env
 .env.*

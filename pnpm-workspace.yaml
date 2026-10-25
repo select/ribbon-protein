@@ -1,0 +1,10 @@
+# Keep Nuxt tooling aligned with the pinned framework (as in movies-deluxe).
+overrides:
+  "@nuxt/cli": 3.35.2
+  "@nuxt/kit": 4.4.5
+
+allowBuilds:
+  "@scarf/scarf": false
+  "@parcel/watcher": true
+  esbuild: true
+  simple-git-hooks: true

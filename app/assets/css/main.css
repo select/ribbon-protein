@@ -1,0 +1,354 @@
+/*
+ * Ribbon Studio — quiet, paper-like interface.
+ * Plain CSS on purpose: works with or without UnoCSS preflight and keeps the
+ * visual system in one readable place.
+ */
+
+:root {
+  --rs-font:
+    ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Helvetica,
+    Arial, sans-serif;
+  --rs-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --rs-ink: #2f2e2b;
+  --rs-ink-strong: #191918;
+  --rs-muted: #787670;
+  --rs-faint: #a5a39c;
+  --rs-line: rgba(55, 53, 47, 0.12);
+  --rs-line-strong: rgba(55, 53, 47, 0.2);
+  --rs-hover: rgba(55, 53, 47, 0.06);
+  --rs-press: rgba(55, 53, 47, 0.1);
+
+  --rs-sidebar: #f7f6f3;
+  --rs-workspace: #efede8;
+  --rs-surface: #ffffff;
+  --rs-paper: #fffefb;
+
+  --rs-focus: #2383e2;
+  --rs-guide: rgba(35, 131, 226, 0.55);
+  --rs-danger: #c4554d;
+  --rs-danger-bg: #fbf1ef;
+  --rs-warn: #9a6a1f;
+  --rs-warn-bg: #fbf5e9;
+  --rs-ok: #4d7c5a;
+
+  --rs-radius: 6px;
+  --rs-radius-sm: 4px;
+  --rs-sidebar-w: 320px;
+  --rs-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  color-scheme: light;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#__nuxt {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--rs-font);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--rs-ink);
+  background: var(--rs-workspace);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--rs-focus);
+  outline-offset: 2px;
+  border-radius: var(--rs-radius-sm);
+}
+
+::selection {
+  background: rgba(35, 131, 226, 0.18);
+}
+
+.rs-visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.rs-num {
+  font-family: var(--rs-mono);
+  font-size: 0.92em;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* ------------------------------------------------------------------ buttons */
+
+.rs-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--rs-line);
+  border-radius: var(--rs-radius);
+  background: var(--rs-surface);
+  color: var(--rs-ink);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  transition:
+    background-color 120ms var(--rs-ease),
+    border-color 120ms var(--rs-ease),
+    color 120ms var(--rs-ease);
+}
+
+.rs-btn:hover:not(:disabled) {
+  background: #f9f8f6;
+  border-color: var(--rs-line-strong);
+}
+
+.rs-btn:active:not(:disabled) {
+  background: var(--rs-hover);
+}
+
+.rs-btn:disabled {
+  color: var(--rs-faint);
+  background: transparent;
+}
+
+.rs-btn--primary {
+  background: var(--rs-ink-strong);
+  border-color: var(--rs-ink-strong);
+  color: #fbfaf7;
+}
+
+.rs-btn--primary:hover:not(:disabled) {
+  background: #000;
+  border-color: #000;
+}
+
+.rs-btn--primary:disabled {
+  background: rgba(55, 53, 47, 0.08);
+  border-color: transparent;
+  color: var(--rs-faint);
+}
+
+.rs-btn--ghost {
+  border-color: transparent;
+  background: transparent;
+}
+
+.rs-btn--ghost:hover:not(:disabled) {
+  background: var(--rs-hover);
+  border-color: transparent;
+}
+
+.rs-btn--sm {
+  min-height: 24px;
+  padding: 0 7px;
+  font-size: 12px;
+  border-radius: var(--rs-radius-sm);
+}
+
+.rs-btn--icon {
+  width: 30px;
+  padding: 0;
+}
+
+.rs-btn--icon.rs-btn--sm {
+  width: 24px;
+}
+
+/* ------------------------------------------------------------------- fields */
+
+.rs-label {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--rs-ink);
+}
+
+.rs-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--rs-muted);
+}
+
+.rs-input {
+  width: 100%;
+  min-height: 28px;
+  padding: 3px 7px;
+  border: 1px solid var(--rs-line);
+  border-radius: var(--rs-radius-sm);
+  background: var(--rs-surface);
+  font-size: 13px;
+  transition: border-color 120ms var(--rs-ease);
+}
+
+.rs-input:hover:not(:disabled) {
+  border-color: var(--rs-line-strong);
+}
+
+.rs-input:focus-visible {
+  outline: none;
+  border-color: var(--rs-focus);
+  box-shadow: 0 0 0 2px rgba(35, 131, 226, 0.22);
+}
+
+.rs-input:disabled {
+  color: var(--rs-faint);
+  background: transparent;
+}
+
+.rs-input[type="number"] {
+  font-family: var(--rs-mono);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.rs-input[type="number"]::-webkit-inner-spin-button,
+.rs-input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Range slider: hairline track, small ink thumb. */
+.rs-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 20px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.rs-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.rs-range::-webkit-slider-runnable-track {
+  height: 2px;
+  border-radius: 2px;
+  background: var(--rs-line-strong);
+}
+
+.rs-range::-moz-range-track {
+  height: 2px;
+  border-radius: 2px;
+  background: var(--rs-line-strong);
+}
+
+.rs-range::-moz-range-progress {
+  height: 2px;
+  border-radius: 2px;
+  background: var(--rs-ink);
+}
+
+.rs-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -5px;
+  border: 1.5px solid var(--rs-ink-strong);
+  border-radius: 50%;
+  background: var(--rs-paper);
+  transition: transform 120ms var(--rs-ease);
+}
+
+.rs-range::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--rs-ink-strong);
+  border-radius: 50%;
+  background: var(--rs-paper);
+}
+
+.rs-range:hover:not(:disabled)::-webkit-slider-thumb {
+  transform: scale(1.15);
+}
+
+.rs-range:focus-visible {
+  outline: none;
+}
+
+.rs-range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px rgba(35, 131, 226, 0.35);
+}
+
+.rs-range:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 3px rgba(35, 131, 226, 0.35);
+}
+
+/* ------------------------------------------------------------------ spinner */
+
+.rs-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--rs-line-strong);
+  border-top-color: var(--rs-ink);
+  border-radius: 50%;
+  animation: rs-spin 0.8s linear infinite;
+  flex: none;
+}
+
+@keyframes rs-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+
+  .rs-spinner {
+    animation: rs-spin 2.4s linear infinite !important;
+  }
+}
