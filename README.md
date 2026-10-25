@@ -10,7 +10,7 @@ Inspired by Michael Fogleman's [plotter work](https://www.michaelfogleman.com/pl
 
 ## Studio preview
 
-![Ribbon Studio showing green fluorescent protein (GFP), PDB 1EMA, rendered as line-only ribbon artwork on A4 paper](docs/images/ribbon-studio-1ema-gfp.png)
+![Ribbon Studio showing green fluorescent protein (GFP), PDB 1EMA, rendered as line-only ribbon artwork on A4 paper](public/images/ribbon-studio-1ema-gfp.png)
 
 *The live studio rendering [GFP (PDB 1EMA)](https://www.rcsb.org/structure/1EMA), calculated entirely in the browser.*
 
