@@ -23,7 +23,7 @@ describe.skipIf(!available)(
       });
       renderJson = wasm.render_json;
     });
-    it.each(["synthetic.pdb", "synthetic.cif"])(
+    it.each(["1crn-backbone.pdb", "1crn-backbone.cif"])(
       "renders %s with computed H/E, line-only physical SVG and option changes",
       async (name) => {
         const text = await readFile(new URL(`../public/examples/${name}`, import.meta.url), "utf8");
@@ -36,14 +36,18 @@ describe.skipIf(!available)(
         validateSvg(first.svg);
         expect(first.strokeCount).toBeGreaterThan(0);
         expect(first.lengthMm).toBeGreaterThan(0);
-        expect(first.residueCount).toBe(32);
+        expect(first.residueCount).toBe(46);
         expect(first.svg).toContain('width="210mm" height="297mm"');
         options.rotation = [25, 40, 10];
-        options.selectedChains = [structure.chains[0]!.id];
+        options.paper = "a3";
+        options.landscape = true;
+        options.widthMm = 420;
+        options.heightMm = 297;
         const next = JSON.parse(renderJson(JSON.stringify({ structure, options }))) as RenderResult;
         expect(next.svg).not.toBe(first.svg);
-        expect(next.residueCount).toBe(16);
-        expect(next.warnings.join(" ")).toMatch(/not DSSP/);
+        expect(next.residueCount).toBe(46);
+        expect(next.svg).toContain('width="420mm" height="297mm"');
+        expect(next.warnings.join(" ")).toMatch(/hydrogen-bond DSSP/);
       },
     );
   },

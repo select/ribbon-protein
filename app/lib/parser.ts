@@ -4,20 +4,19 @@ import { trajectoryFromMmCIF } from "molstar/lib/mol-model-formats/structure/mmc
 import { trajectoryFromPDB } from "molstar/lib/mol-model-formats/structure/pdb";
 import { Structure, Unit } from "molstar/lib/mol-model/structure";
 import type { Model, ElementIndex } from "molstar/lib/mol-model/structure/model";
-import { SecondaryStructureType } from "molstar/lib/mol-model/structure/model/types";
 import { SortedArray } from "molstar/lib/mol-data/int";
-import { computeUnitZhangSkolnik } from "molstar/lib/mol-model-props/computed/secondary-structure/zhang-skolnik";
+import { computeBackboneDSSP } from "./dssp";
 import type { BackboneSegment, StructureData, Vec3 } from "../types/render";
 import { LIMITS, validateFile } from "./limits";
 
-type Atoms = Record<"CA" | "C" | "O" | "N", Vec3>;
+type Atoms = Record<"CA" | "C" | "O" | "N", Vec3> & { OXT?: Vec3 };
 interface SelectedSegment {
   chainId: string;
-  atoms: Atoms[];
+  atoms: { atoms: Atoms; compId: string }[];
 }
 const backboneNames = ["CA", "C", "O", "N"] as const;
 export const ASSIGNMENT_WARNING =
-  "Secondary structure is computed locally by Mol* Zhang–Skolnick (CA geometry), not DSSP. Helices/sheets, especially termini and inter-chain sheets, may differ from hydrogen-bond DSSP assignments.";
+  "Secondary structure uses local hydrogen-bond DSSP (Mol*, original helix convention; H/G/I → H, E/B → E). Boundaries and beta bulges can differ between DSSP implementations; incomplete backbones can remove hydrogen-bond contacts.";
 
 async function readModel(text: string, name: string): Promise<{ model: Model; multiple: boolean }> {
   if (/\.(pdb|ent)$/i.test(name)) {
@@ -43,7 +42,7 @@ function residueAtoms(
   model: Model,
   start: number,
   end: number,
-): { atoms?: Atoms; alternate: boolean } {
+): { atoms?: Atoms; compId: string; alternate: boolean } {
   const { atoms } = model.atomicHierarchy;
   const conf = model.atomicConformation;
   const candidates = new Map<string, Map<string, number>>();
@@ -51,10 +50,10 @@ function residueAtoms(
     // Mol* makes duplicate PDB label names unique (CA_1, etc.), including
     // alternate locations. Auth names retain the original atom identity.
     const original = atoms.auth_atom_id.value(a);
-    const name = (backboneNames as readonly string[]).includes(original)
+    const name = ([...backboneNames, "OXT"] as readonly string[]).includes(original)
       ? original
       : atoms.label_atom_id.value(a);
-    if (!(backboneNames as readonly string[]).includes(name)) continue;
+    if (![...backboneNames, "OXT"].includes(name)) continue;
     const alt = atoms.label_alt_id.value(a) || "";
     if (!candidates.has(alt)) candidates.set(alt, new Map());
     const group = candidates.get(alt)!;
@@ -66,6 +65,7 @@ function residueAtoms(
   const ids = [...candidates.keys()].filter(Boolean).sort();
   if (!ids.length) ids.push("");
   let best: Atoms | undefined;
+  let compId = "";
   let score = -Infinity;
   for (const alt of ids) {
     const group = candidates.get(alt);
@@ -81,10 +81,13 @@ function residueAtoms(
     const occupancy = selected.reduce((sum, a) => sum + conf.occupancy.value(a), 0);
     if (occupancy > score) {
       best = Object.fromEntries(backboneNames.map((name, i) => [name, points[i]])) as Atoms;
+      const oxt = group?.get("OXT") ?? blank.get("OXT");
+      if (oxt !== undefined) best.OXT = [conf.x[oxt]!, conf.y[oxt]!, conf.z[oxt]!];
+      compId = atoms.label_comp_id.value(selected[0]!);
       score = occupancy;
     }
   }
-  return { atoms: best, alternate: candidates.size > 1 || candidates.has("") === false };
+  return { atoms: best, compId, alternate: candidates.size > 1 || candidates.has("") === false };
 }
 
 const cifHeader = [
@@ -112,18 +115,21 @@ const cifHeader = [
   "_atom_site.pdbx_PDB_model_num",
 ].join("\n");
 
-/** Rebuild only the selected complete backbones for assignment. This prevents
- * alternate conformers, missing atoms or gaps from contaminating Mol*'s CA trace.
- * Synthetic labels are private to computation; exported chains keep original IDs.
+/** Normalize coherent backbones, retaining chemical identity and coordinates.
+ * Each continuous fragment gets a private chain label, but all fragments share
+ * one atomic DSSP unit so hydrogen bonds between chains/strands remain visible.
+ * Exported chains keep original author IDs. Short fragments still supply contacts.
  */
 async function assignSecondary(segments: SelectedSegment[]): Promise<BackboneSegment[]> {
   const rows = [cifHeader];
   let atomId = 0;
   segments.forEach((segment, s) =>
-    segment.atoms.forEach((residue, r) => {
-      for (const name of backboneNames) {
+    segment.atoms.forEach(({ atoms, compId }, r) => {
+      for (const name of [...backboneNames, "OXT"] as const) {
+        const point = atoms[name];
+        if (!point) continue;
         rows.push(
-          `ATOM ${++atomId} ${name[0]} ${name} . ALA S${s} ${s + 1} ${r + 1} ? ${residue[name].join(" ")} 1 0 ${r + 1} ALA S${s} ${name} 1`,
+          `ATOM ${++atomId} ${name[0]} ${name} . '${compId}' S${s} ${s + 1} ${r + 1} ? ${point.join(" ")} 1 0 ${r + 1} '${compId}' S${s} ${name} 1`,
         );
       }
     }),
@@ -132,52 +138,47 @@ async function assignSecondary(segments: SelectedSegment[]): Promise<BackboneSeg
   const structure = Structure.ofModel(model);
   const output = segments.map((segment) => ({
     chainId: segment.chainId,
-    residues: segment.atoms.map((atoms) => ({
+    residues: segment.atoms.map(({ atoms }) => ({
       ca: atoms.CA,
       carbonyl: atoms.O.map((v, i) => v - atoms.C[i]!) as Vec3,
       kind: "C" as "H" | "E" | "C",
     })),
   }));
+  // Structure.ofModel normally partitions chains into separate units; DSSP
+  // needs a single identity-coordinate unit for the whole selected model.
+  const base = structure.units.find(Unit.isAtomic);
+  if (!base) throw new Error("Expected an atomic protein backbone.");
+  const unit = Unit.create(
+    0,
+    0,
+    0,
+    base.traits,
+    0 /* Atomic */,
+    model,
+    base.conformation.operator,
+    SortedArray.ofSortedArray(
+      Array.from({ length: model.atomicHierarchy.atoms._rowCount }, (_, i) => i as ElementIndex),
+    ),
+  );
   let assigned = 0;
-  for (const unit of structure.units) {
-    if (!Unit.isAtomic(unit)) continue;
-    // Mol* may group multiple small chains into one unit. Split by original
-    // normalized segment before computation so assignment never spans a gap.
-    const byChain = new Map<number, ElementIndex[]>();
-    for (let i = 0; i < unit.elements.length; i++) {
-      const a = unit.elements[i]!;
-      const c = unit.chainIndex[a]!;
-      if (!byChain.has(c)) byChain.set(c, []);
-      byChain.get(c)!.push(a);
-    }
-    for (const [chain, elements] of byChain) {
-      const child = unit.getChild(SortedArray.ofSortedArray(elements));
-      if (!Unit.isAtomic(child)) throw new Error("Expected an atomic protein backbone.");
-      const ss = await computeUnitZhangSkolnik(child);
-      const s = Number(model.atomicHierarchy.chains.label_asym_id.value(chain).slice(1));
-      const target = output[s];
-      if (!target) throw new Error("Computed secondary-structure chain mapping failed.");
-      for (let i = 0; i < child.proteinElements.length; i++) {
-        const residue = child.residueIndex[child.proteinElements[i]!]!;
-        const index = model.atomicHierarchy.residues.label_seq_id.value(residue) - 1;
-        const flag = ss.type[ss.getIndex(residue)];
-        if (flag === undefined || !target.residues[index])
-          throw new Error("Computed secondary-structure residue mapping failed.");
-        target.residues[index]!.kind = SecondaryStructureType.is(
-          flag,
-          2 /* Mol* SecondaryStructureType.Flag.Helix */,
-        )
-          ? "H"
-          : SecondaryStructureType.is(flag, 4 /* Mol* SecondaryStructureType.Flag.Beta */)
-            ? "E"
-            : "C";
-        assigned++;
-      }
-    }
+  if (!Unit.isAtomic(unit)) throw new Error("Expected an atomic protein backbone.");
+  const ss = computeBackboneDSSP(unit);
+  for (let i = 0; i < ss.residueIndices.length; i++) {
+    const residue = ss.residueIndices[i]!;
+    const atom = model.atomicHierarchy.residueAtomSegments.offsets[residue]!;
+    const chain = unit.chainIndex[atom]!;
+    const s = Number(model.atomicHierarchy.chains.label_asym_id.value(chain).slice(1));
+    const target = output[s];
+    const index = model.atomicHierarchy.residues.label_seq_id.value(residue) - 1;
+    const kind = ss.kinds[i];
+    if (!kind || !target?.residues[index])
+      throw new Error("Computed secondary-structure residue mapping failed.");
+    target.residues[index]!.kind = kind;
+    assigned++;
   }
   if (assigned !== segments.reduce((n, s) => n + s.atoms.length, 0))
     throw new Error("Secondary-structure assignment did not cover every selected residue.");
-  return output;
+  return output.filter((s) => s.residues.length >= 4);
 }
 
 /** Local-only parser; deliberately not imported by the main/UI bundle. */
@@ -208,11 +209,11 @@ export async function parseStructure(text: string, name: string): Promise<Struct
     const endAtom = h.chainAtomSegments.offsets[c + 1]!;
     const start = h.residueAtomSegments.index[startAtom]!;
     const end = h.residueAtomSegments.index[endAtom - 1]! + 1;
-    let current: Atoms[] = [];
+    let current: SelectedSegment["atoms"] = [];
     let previousSeq: number | undefined;
     const flush = () => {
-      if (current.length >= 4) segments.push({ chainId, atoms: current });
-      else short += current.length;
+      if (current.length) segments.push({ chainId, atoms: current });
+      if (current.length < 4) short += current.length;
       current = [];
       previousSeq = undefined;
     };
@@ -238,25 +239,26 @@ export async function parseStructure(text: string, name: string): Promise<Struct
           : h.residues.auth_seq_id.value(r);
       const previous = current.at(-1);
       const distance = previous
-        ? Math.hypot(...selected.atoms.CA.map((v, i) => v - previous.CA[i]!))
+        ? Math.hypot(...selected.atoms.CA.map((v, i) => v - previous.atoms.CA[i]!))
         : 0;
       if (
         previous &&
         (distance > 4.5 ||
           distance < 1e-6 ||
+          Math.hypot(...selected.atoms.N.map((v, i) => v - previous.atoms.C[i]!)) > 2.5 ||
           (previousSeq !== undefined && (seq > previousSeq + 1 || seq < previousSeq)))
       ) {
         gaps++;
         flush();
       }
-      current.push(selected.atoms);
+      current.push({ atoms: selected.atoms, compId: selected.compId });
       previousSeq = seq;
     }
     flush();
   }
-  if (!segments.length)
+  if (!segments.some((s) => s.atoms.length >= 4))
     throw new Error(
-      "No drawable protein backbone. Need at least four consecutive residues with CA, C, O and N atoms, and CA gaps ≤4.5 Å.",
+      "No drawable protein backbone. Need at least four consecutive residues with CA, C, O and N atoms, CA gaps ≤4.5 Å and peptide C–N gaps ≤2.5 Å.",
     );
   if (segments.length > LIMITS.segments)
     throw new Error("Too many backbone fragments (limit 512). Choose a less fragmented protein.");
@@ -278,8 +280,11 @@ export async function parseStructure(text: string, name: string): Promise<Struct
     warnings.push(
       `${incomplete} incomplete or invalid protein residues excluded; backbones split at these positions.`,
     );
-  if (gaps) warnings.push(`${gaps} sequence/CA gaps split into separate backbones.`);
-  if (short) warnings.push(`${short} residues in fragments shorter than four excluded.`);
+  if (gaps) warnings.push(`${gaps} sequence/CA/peptide gaps split into separate backbones.`);
+  if (short)
+    warnings.push(
+      `${short} residues in fragments shorter than four used for DSSP contacts only, not drawn.`,
+    );
   if (alternates)
     warnings.push(
       `${alternates} alternate-location residues: one complete conformer selected by occupancy (lexical ties), with shared blank atoms.`,

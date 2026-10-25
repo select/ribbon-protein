@@ -160,7 +160,9 @@ describe("useRibbon reactive runtime", () => {
   it("fetches only the self-hosted example and ignores late fetch completions", async () => {
     const h = harness();
     await h.studio.loadExample();
-    expect(h.fetch.mock.calls[0]![0]).toBe("https://example.test/studio/examples/synthetic.pdb");
+    expect(h.fetch.mock.calls[0]![0]).toBe(
+      "https://example.test/studio/examples/1crn-backbone.pdb",
+    );
     const response = deferred<Response>();
     h.fetch.mockReturnValueOnce(response.promise);
     const load = h.studio.loadExample();

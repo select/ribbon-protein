@@ -160,7 +160,7 @@ export function createRibbonStudio(runtime: RibbonRuntime, env: StudioEnvironmen
     fetchAbort = controller;
     try {
       const response = await (env.fetch ?? fetch)(
-        publicAssetUrl(env.baseURL, "examples/synthetic.pdb", env.origin),
+        publicAssetUrl(env.baseURL, "examples/1crn-backbone.pdb", env.origin),
         { signal: controller.signal },
       );
       if (!response.ok)
@@ -169,7 +169,7 @@ export function createRibbonStudio(runtime: RibbonRuntime, env: StudioEnvironmen
       if (declared > LIMITS.fileBytes)
         throw new Error("Bundled example exceeds the local file limit.");
       const text = await response.text();
-      await acceptText(text, "synthetic.pdb", job);
+      await acceptText(text, "1crn-backbone.pdb", job);
     } catch (cause) {
       if (!disposed && epoch === job && !isAbort(cause)) fail(cause);
     } finally {

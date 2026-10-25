@@ -179,8 +179,8 @@ function chainLabel(id: string): string {
           No chains selected — select at least one chain to draw.
         </p>
         <p v-else class="rs-hint">
-          {{ selectedResidues.toLocaleString() }} residues selected. Secondary structure uses Mol*
-          Zhang–Skolnick geometry, not hydrogen-bond DSSP.
+          {{ selectedResidues.toLocaleString() }} residues selected. Secondary structure uses local
+          hydrogen-bond DSSP (Mol*, original helix convention).
         </p>
       </div>
     </template>

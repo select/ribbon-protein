@@ -44,7 +44,7 @@ This selects the GitHub Pages preset and `/ribbon-protein/` base path, including
 
 ## Using the studio
 
-1. Choose or drop a `.cif`, `.mmcif`, `.pdb` or `.ent` file. **Load example** opens a small bundled synthetic structure without contacting a molecular database.
+1. Choose or drop a `.cif`, `.mmcif`, `.pdb` or `.ent` file. **Load example** opens a small public crambin (1CRN) backbone bundled with the app, without contacting a molecular database.
 2. Select chains and optional per-chain pen colors.
 3. Choose paper, orientation and margin:
    - **A4:** 210 × 297 mm.
@@ -65,12 +65,12 @@ Pen width changes preview/export stroke width; your physical pen determines actu
 
 ## Calculation and limitations
 
-- First molecular model only. Original author chain IDs are preserved. Incomplete protein backbones, sequence/CA gaps and alternate conformers are handled explicitly. At least four complete residues are needed for a drawable fragment. Ligands, waters and biological-assembly expansion are not rendered.
-- **Secondary structure uses Mol* Zhang–Skolnick CA geometry, not hydrogen-bond DSSP.** It is computed from coordinates even without HELIX/SHEET annotations, but helix/sheet boundaries and inter-chain sheets can differ from DSSP assignments. The UI exposes this warning; computation failures do not silently fall back to all loops.
+- First molecular model only. Original author chain IDs are preserved. Incomplete protein backbones, sequence/CA/peptide gaps and alternate conformers are handled explicitly. At least four complete residues are needed for a drawable fragment. Ligands, waters and biological-assembly expansion are not rendered.
+- **Secondary structure uses local hydrogen-bond DSSP with Mol* stages**, computed from coordinates even without HELIX/SHEET annotations. Chemical residue identities (including proline), coherent conformers and peptide breaks are retained; all selected fragments share hydrogen-bond contacts, including inter-chain sheets. Original helix conventions are simplified as H/G/I → H and E/B → E. Incomplete backbones, unusual residue chemistry, helix boundaries and beta-bulge conventions can still differ between DSSP implementations. Computation failures are errors, never a silent all-loop fallback. See [assignment details and public reference comparisons](docs/web-dssp.md).
 - Rust handles ribbon smoothing, continuous loop/ribbon tracks, inset borders, projection, spatially indexed hidden-line trimming, stroke welding/joining, simplification and ordering. This is an artistic ribbon illustration, not a molecular surface renderer.
 - Visibility uses **average panel depth**, so intersecting or strongly twisted surfaces may have local occlusion artifacts. PCA orientation, full-precision geometry, page fitting and secondary-structure assignment all affect the final illustration.
 - Rendering is debounced rather than guaranteed realtime during dragging. The previous preview remains visible but marked stale during calculation.
-- Browser input limits: 20 MiB per file, 250,000 atoms, 10,000 residues and 512 drawable fragments. The engine additionally caps spline samples, track count, clipping and path-processing work. Oversized drawings fail with a message instead of silently reducing quality. Browser jobs time out after two minutes.
+- Browser input limits: 20 MiB per file, 250,000 atoms, 10,000 residues and 512 backbone fragments (including contact-only fragments). The engine additionally caps spline samples, track count, clipping and path-processing work. Oversized drawings fail with a message instead of silently reducing quality. DSSP contact/ladder work is also bounded. Browser jobs time out after two minutes.
 - No multi-structure alignment, G-code, file persistence or account system in this first version. Mol* remains available for future alignment features.
 
 ## Repository layout
@@ -78,7 +78,7 @@ Pen width changes preview/export stroke width; your physical pen determines actu
 ```text
 app/                    Vue UI, local parser, worker and state lifecycle
 crates/ribbon-core/      Pure Rust renderer, WASM boundary and native tests
-public/examples/        Small synthetic PDB/mmCIF examples and provenance
+public/examples/        Public crambin backbone demo, synthetic data and provenance
 public/templates/       Standalone preview-only coaster guide
 public/wasm/            Generated wasm-pack output (ignored)
 scripts/                WASM build, smoke check and fixture generation
@@ -102,6 +102,6 @@ cargo test --workspace
 pnpm build
 ```
 
-Real-WASM Vitest cases require `pnpm build:wasm`; they are skipped if the generated module is absent. CI builds WASM before running them. Native tests cover spline interpolation, interval clipping, stroke continuity, physical dimensions and workload limits, using small committed synthetic fixtures.
+Real-WASM Vitest cases require `pnpm build:wasm`; they are skipped if the generated module is absent. CI builds WASM before running them. Parser regressions use minimal, publicly sourced RCSB backbones with provenance, including 1EZG continuous sheet runs, mixed/helix-rich references, proline chemistry and inter-chain contacts. Native tests cover spline interpolation, interval clipping, stroke continuity, physical dimensions and workload limits, using small committed synthetic fixtures.
 
 `simple-git-hooks` runs lint/format checks before commits and `commitlint` enforces Conventional Commits. Use `pnpm fmt` to format application/config files. Build artifacts, local structure bundles and secrets are ignored and must not be force-added.

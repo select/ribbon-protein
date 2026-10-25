@@ -7,7 +7,10 @@ worker-local parsing, responsive studio controls, physical SVG/PNG exports and
 Python-reference reorganization are implemented. See [validation notes](web-validation.md)
 for verified checks, parity differences and follow-up scope. The sections below
 record the original implementation plan; exact DSSP parity and alignment remain
-explicitly outside this first delivery.
+explicitly outside this first delivery. The initial CA-geometry assignment has since
+been superseded by local hydrogen-bond DSSP with chemical and fragment-aware
+handling; see [DSSP correction notes](web-dssp.md). The old no-push milestone below
+records the original plan, not the subsequent authorized Pages publication.
 
 ## Goal
 
@@ -17,7 +20,7 @@ Replace the Python-first entry point with a minimal Nuxt 4 application. Nuxt/Nit
 
 - Local `.cif`, `.mmcif`, `.pdb`, `.ent` file picker and drag/drop, with limits, validation, actionable errors and no upload endpoint.
 - First model, original chain IDs, chain selection and optional chain colors. Exclude ligands/waters; split incomplete backbones and CA gaps >4.5 Å; require at least four complete residues per segment.
-- Molecular secondary structure calculated locally through Mol*; disclose assignment differences from MDTraj DSSP. Do not silently label every unannotated structure as loops.
+- Molecular secondary structure calculated locally with Mol* hydrogen-bond DSSP stages, retaining residue identity and inter-chain contacts; disclose assignment differences from MDTraj DSSP. Do not silently label every unannotated structure as loops.
 - Rotation around X/Y/Z, pointer-drag rotation and reset to a principal-axis view. Debounce re-renders; keep the page responsive; cancellation terminates/recreates the worker and invalidates obsolete results.
 - A4 (210 × 297 mm), A3 (297 × 420 mm), portrait/landscape and a single rounded-square Bierdeckel guide. Allow custom dimensions and margin if inexpensive.
 - Bierdeckel: extract `rect6` from the supplied template, not its unrelated circle or full multi-coaster sheet. Guide centerline is 92.74 × 92.74 mm with 10 mm corner radii, inset 0.2 mm in a 93.14 × 93.14 mm canvas including the original 0.4 mm stroke. Default 5 mm artwork margin keeps the rectangular fit within the rounded corners. Preview guide is not plotted/exported by default. Preserve provenance in a small standalone SVG; do not copy embedded images or other artwork.
@@ -28,7 +31,7 @@ Replace the Python-first entry point with a minimal Nuxt 4 application. Nuxt/Nit
 
 ## UI direction
 
-Notion-like, not a molecular CAD application: warm white/gray surfaces, restrained black typography, hairline borders, generous whitespace, small monochrome icons, compact settings sidebar and a large paper preview. Avoid gradients, heavy card shadows, marketing landing pages and a permanently visible Mol* viewer. Controls grouped as Structure, Paper, View, Ink; Advanced collapsed initially. Drag/drop empty state and a local bundled synthetic example for an immediately testable app.
+Notion-like, not a molecular CAD application: warm white/gray surfaces, restrained black typography, hairline borders, generous whitespace, small monochrome icons, compact settings sidebar and a large paper preview. Avoid gradients, heavy card shadows, marketing landing pages and a permanently visible Mol* viewer. Controls grouped as Structure, Paper, View, Ink; Advanced collapsed initially. Drag/drop empty state and a locally bundled public crambin backbone for an immediately testable app.
 
 ## Architecture and ownership
 
@@ -43,7 +46,7 @@ app/
   types/render.ts           # shared contract, coordinator-owned
 crates/ribbon-core/         # Rust engine and native tests: core agent
 public/templates/          # standalone coaster guide: coordinator
-public/examples/           # small synthetic fixtures: runtime agent
+public/examples/           # public scientific demo + synthetic topology fixtures
 public/wasm/               # generated wasm-pack artifacts, ignored
 scripts/                   # WASM build + verification helpers: runtime agent
 tests/                     # TS tests: runtime agent

@@ -4,6 +4,8 @@ export const LIMITS = {
   residues: 10_000,
   segments: 512,
   renderWork: 6_000_000,
+  dsspPairs: 2_000_000,
+  dsspBonds: 100_000,
   jobTimeoutMs: 120_000,
 } as const;
 

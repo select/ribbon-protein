@@ -1,8 +1,58 @@
 # Web implementation validation
 
-Validated locally on 2026-10-25 with Node 24.21, pnpm 11.22, Rust 1.96 and headless Chrome on Linux. These are local results, not a claim that remote CI has run. The GitHub workflow is configured; nothing was pushed.
+## Hydrogen-bond DSSP correction
 
-## Automated checks
+The CA-geometry assignment in the initial validation below is **superseded**.
+The current worker computes hydrogen-bond DSSP using Mol* stages with explicit
+proline chemistry, peptide breaks and shared inter-chain contacts. See
+[algorithm details, exact counts and investigated oracle differences](web-dssp.md).
+No Rust rendering/camera/pen-width behavior was changed.
+
+Locally validated with Node 24.21, pnpm 11.22, Rust 1.96 and headless Chrome:
+
+- `pnpm build:wasm` and `pnpm test:wasm`: actual generated web-target module passed.
+- `pnpm check`: lint/typecheck and **42 tests passed**, including actual parser →
+  WASM integration (none skipped). New public scientific fixtures replace
+  illustrative CA-geometry assumptions; continuous beta runs, H/G simplification,
+  PRO donors, cross-chain/short-fragment contacts, coherent alternatives, gaps,
+  work limits and assignment failure are covered. Cancellation/lifecycle tests
+  remain passing.
+- `pnpm fmt:check`, `pnpm build` and **`GITHUB_PAGES=true pnpm generate`** passed.
+  The Pages preset/base path remains `/ribbon-protein/`; Vite Environment API and
+  startup prebundling include the actual DSSP imports.
+- Chrome passed real first-file 1EZG mmCIF loading in a fresh development app
+  (isolated source copy to avoid interfering with the user's existing server),
+  then 1TEN/1MBN PDB and 1CRN mmCIF loading. No mid-calculation document reload or
+  newly discovered dependency reload occurred. A generated Pages-base-path build
+  served by a plain static file server passed the same checks.
+- Browser-observed worker results matched the documented H/E/C counts, including
+  1EZG **0/38/126** and all twelve continuous EEE runs. Real SVG/PNG downloads,
+  line-only SVG, rotation/stale-export blocking, hard cancellation, invalid-file
+  recovery and the offline physical 1CRN demo passed. No upload/remote calculation
+  requests, browser errors or HTTP error responses occurred.
+- At **390 × 844** with touch/mobile emulation, real 1EZG renders without overflow;
+  settings expose the updated DSSP message, Escape restores focus, and the MDI
+  GitHub link remains in the top-right toolbar. Sidebar attribution is unchanged.
+- Matched-view WASM before/after images for **1EZG, 1TEN, 1CRN and 1MBN** were
+  opened and visually inspected. CA/carbonyl arrays, camera and options were
+  asserted equal; only SSE labels changed. 1EZG's broad, spreading sheet sections
+  visibly return (675 → 955 strokes; 20.22 → 24.21 m). Its default PCA orientation
+  still differs from the legacy reference; that is deliberately not "fixed" here.
+  Browser/export PNGs were also opened, including mobile controls.
+
+Artifacts and scripts for this correction are under `/tmp/ribbon-dssp-validate/`,
+not committed renders or local input bundles. Upstream sourcemap and SPA
+prerender warnings remain non-failing. Rust and legacy behavior were untouched;
+the historical native/reference test results below were not re-run for this fix.
+Remote CI/Pages results are reported separately after the authorized publication;
+this section records local validation rather than pre-claiming remote success.
+
+## Initial implementation baseline (historical)
+
+The following records the initial implementation's local checks on 2026-10-25,
+before the DSSP correction and subsequent GitHub Pages publication.
+
+### Automated checks
 
 | Check | Result |
 | --- | --- |
@@ -20,7 +70,7 @@ Rust tests cover spline/PCHIP numerical parity with Python/SciPy, 96 Shapely cli
 
 Non-failing upstream warnings remain: Nuxt's component-name plugin reports missing transformation sourcemaps during build; static generation notes that an `ssr: false` app does not prerender its content. Python MDTraj emits its existing dummy-unit-cell warning.
 
-## Browser checks
+### Browser checks (initial baseline)
 
 Verified against the Nitro production build and against the generated assets served by a plain HTTP file server (no calculation backend). The runtime agent also checked the `/studio/` base-path deployment. The coordinator independently checked:
 
@@ -38,7 +88,7 @@ Verified against the Nitro production build and against the generated assets ser
 
 Browser scripts, screenshots and downloaded test artifacts are local session artifacts under `/tmp/ribbon-web-20261025/`, not committed source or portable test fixtures. The normal automated suite is in `tests/` and `crates/ribbon-core/`.
 
-## Python comparison and deliberate differences
+### Python comparison and deliberate differences (initial baseline)
 
 1TEN contains 89 drawable residues. Using the Python-derived DSSP labels as the Rust input isolates geometry from assignment differences:
 
@@ -48,11 +98,11 @@ Browser scripts, screenshots and downloaded test artifacts are local session art
 | Rust with the same normalized DSSP-labelled backbone | 591 | 36.24 m |
 | Browser: Mol* Zhang–Skolnick assignment + Rust | 486 | 42.09 m |
 
-The common ribbon/loop style is retained, but **this is not exact output parity**. Rust uses a deterministic PCA sign convention, unrounded intermediate coordinates and fitting based on actual blended outlines with half-pen allowance. This can change the initial view, visibility, track count and joined paths compared with Python's rounded intermediate SVG. Mol*'s CA-geometry assignments further change ribbon boundaries; notably they are not hydrogen-bond DSSP. The application and README disclose this explicitly.
+The common ribbon/loop style is retained, but **this is not exact output parity**. Rust uses a deterministic PCA sign convention, unrounded intermediate coordinates and fitting based on actual blended outlines with half-pen allowance. This can change the initial view, visibility, track count and joined paths compared with Python's rounded intermediate SVG. The initial Mol* CA-geometry assignments further changed ribbon boundaries; that algorithm and its old UI/README warning are now superseded by the hydrogen-bond DSSP correction above.
 
 ## Follow-up scope
 
-- Evaluate hydrogen-bond DSSP in the browser if closer scientific/visual parity is required; preserve residue identity and inter-chain contacts in such an implementation.
+- **Completed:** hydrogen-bond DSSP in the browser, preserving residue identity and inter-chain contacts. Remaining implementation-specific boundaries/bulges are documented in [DSSP notes](web-dssp.md).
 - Reuse idle workers/cache geometry or add a cheaper interaction preview if full-quality rotation latency is too high. Current hard cancellation is correct but can incur worker startup costs.
 - Add a maintained automated browser suite and test Firefox/Safari; current browser validation is Chrome-based.
 - Multi-structure alignment, biological assemblies, persistent projects and plotter-specific machine output remain outside this first version.
