@@ -72,6 +72,18 @@ describe("general non-protein molecules", () => {
     expect(incomplete.molecules![0]!.atoms).toHaveLength(49);
     expect(incomplete.molecules![0]!.bonds).toHaveLength(47);
   });
+  it("recognizes phosphocholine lipid names such as MC3 in AQP0 (2B6O)", async () => {
+    // Reuse the connectivity fixture; only the component identity/name changes.
+    // This is a classification regression, not experimental MC3 coordinates.
+    const text = await readFile(new URL("./fixtures/6baj-lipid.cif", import.meta.url), "utf8");
+    const source = text
+      .replaceAll("PTY", "MC3")
+      .replaceAll("PHOSPHATIDYLETHANOLAMINE", "1,2-DIMYRISTOYL-RAC-GLYCERO-3-PHOSPHOCHOLINE");
+    const structure = await parseStructure(source, "phosphocholine.cif");
+    expect(structure.molecules).toHaveLength(1);
+    expect(structure.molecules![0]!.category).toBe("lipid");
+    expect(structure.molecules![0]!.bonds).toHaveLength(49);
+  });
   it("keeps close ligands separate, omits hydrogen and exposes water and isolated atoms", async () => {
     const s = await parseStructure(molecularCif, "molecules.cif");
     expect(s.chains).toHaveLength(4);

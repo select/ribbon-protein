@@ -9,7 +9,7 @@ import type { Molecule, Vec3 } from "../types/render";
 function isLipid(model: Model, compId: string, type: number | undefined): boolean {
   if (type === 4 || compId === "PTY") return true;
   const component = model.properties.chemicalComponentMap.get(compId);
-  return /phosphatid|cardiolipin|cholesterol|sphingomyelin|ceramide|diacylglycerol|triacylglycerol|glycolipid|lipopolysaccharide/i.test(
+  return /phosphatid|phosphocholine|cardiolipin|cholesterol|sphingomyelin|ceramide|diacylglycerol|triacylglycerol|glycolipid|lipopolysaccharide/i.test(
     component?.name ?? "",
   );
 }
