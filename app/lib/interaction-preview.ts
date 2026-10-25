@@ -1,4 +1,5 @@
 import type { PreviewScene, RenderOptions, RenderResult, Vec3 } from "../types/render";
+import { drawingPenWidth } from "./options";
 
 type P2 = [number, number];
 export function previewGeometryKey(options: RenderOptions): string {
@@ -100,9 +101,10 @@ export function renderInteractionPreview(scene: PreviewScene, o: RenderOptions):
     ribbons.push({ chainId: molecule.chainId, paths: molecularPaths });
   }
   const span: P2 = [high[0] - low[0], high[1] - low[1]];
+  const width = drawingPenWidth(o, scene);
   const scale = Math.min(
-    (o.widthMm - 2 * o.marginMm - o.penWidthMm) / Math.max(span[0], 1e-12),
-    (o.heightMm - 2 * o.marginMm - o.penWidthMm) / Math.max(span[1], 1e-12),
+    (o.widthMm - 2 * o.marginMm - width) / Math.max(span[0], 1e-12),
+    (o.heightMm - 2 * o.marginMm - width) / Math.max(span[1], 1e-12),
   );
   const paths: string[] = [];
   let lengthMm = 0;
@@ -121,8 +123,11 @@ export function renderInteractionPreview(scene: PreviewScene, o: RenderOptions):
           fitted[i]![1] - fitted[i - 1]![1],
         );
       const color = o.chainColors[ribbon.chainId] ?? "black";
+      const lipid = scene.molecules?.some(
+        (m) => m.chainId === ribbon.chainId && m.category === "lipid",
+      );
       paths.push(
-        `<path stroke="${color}" d="${fitted.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(4)},${p[1].toFixed(4)}`).join("")}"/>`,
+        `<path stroke="${color}"${lipid ? ` stroke-width="${o.lipidWidthMm}"` : ""} d="${fitted.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(4)},${p[1].toFixed(4)}`).join("")}"/>`,
       );
     }
   return {

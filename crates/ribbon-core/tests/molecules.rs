@@ -91,6 +91,33 @@ fn molecular_selection_rotation_and_colors_have_exact_session_cache_parity() {
 }
 
 #[test]
+fn lipids_have_independent_width_even_when_sharing_a_color_with_other_molecules() {
+    let mut req = request();
+    req.structure.molecules[0].category = "lipid".into();
+    req.options
+        .chain_colors
+        .insert("ligand".into(), "red".into());
+    req.options.chain_colors.insert("ion".into(), "red".into());
+    let mut session = RenderSession::new(req.structure.clone()).unwrap();
+    for width in [0.8, 1.2, 2.0] {
+        req.options.lipid_width_mm = width;
+        let (actual, timing) = session.calculate(req.options.clone(), false).unwrap();
+        assert_eq!(actual.svg, render(&req).unwrap().svg);
+        assert!(!timing.path_cache_hit);
+        assert!(actual
+            .svg
+            .contains(&format!("stroke=\"red\" stroke-width=\"{width}\"")));
+        assert!(actual.svg.contains("stroke=\"red\">"));
+        let (_, cached) = session.calculate(req.options.clone(), false).unwrap();
+        assert!(cached.path_cache_hit);
+    }
+    for width in [0.0, 2.1, f64::NAN] {
+        req.options.lipid_width_mm = width;
+        assert!(render(&req).is_err());
+    }
+}
+
+#[test]
 fn malformed_molecular_geometry_is_rejected_even_when_unselected() {
     let req = request();
     for mutation in 0..7 {

@@ -51,7 +51,7 @@ This selects the GitHub Pages preset and `/ribbon-protein/` base path, including
 ## Using the studio
 
 1. Choose or drop a `.cif`, `.mmcif`, `.pdb` or `.ent` file. **Load example** opens a small public crambin (1CRN) backbone bundled with the app, without contacting a molecular database.
-2. Select protein chains and non-protein components, with optional per-component pen colors. Category checkboxes toggle molecules, DNA/RNA/other polymers, single atoms and water; water is hidden initially.
+2. Select protein chains and non-protein components, with optional per-component pen colors. Group controls toggle and recolor all lipids, other molecules, DNA/RNA/other polymers, single atoms or water at once, including currently hidden members. Lipids start in red with an independent **Lipid stroke** width (default 0.8 mm versus the protein's 0.25 mm); water is hidden initially.
 3. Choose paper, orientation and margin:
    - **A4:** 210 × 297 mm.
    - **A3:** 297 × 420 mm.
@@ -67,7 +67,7 @@ Guides belong to the preview and are **never exported**. The coaster export is a
 
 SVGs contain visible vector centerlines, grouped by pen color, with physical millimeter dimensions. There are **no filled surfaces, masks, clipping paths, fonts or embedded raster images**. Temporary ribbon surfaces are only used for geometric hidden-line removal.
 
-Pen width changes preview/export stroke width; your physical pen determines actual ink width. It does not automatically change loop or border spacing. Thick pens and closely spaced tracks can overlap—try a small physical sample before plotting. The default `backbone` path ordering retains source direction and smooth joins; `travel` allows reversal to reduce pen-up travel. Neither intentionally bridges real backbone gaps.
+Pen width changes preview/export stroke width; your physical pen determines actual ink width. It does not automatically change loop or border spacing. The independent lipid stroke width affects preview, SVG and PNG; for physical plotting, use a matching pen or a plotter tool that expands strokes—SVG stroke width alone does not create extra pen passes. Thick pens and closely spaced tracks can overlap—try a small physical sample before plotting. The default `backbone` path ordering retains source direction and smooth joins; `travel` allows reversal to reduce pen-up travel. Neither intentionally bridges real backbone gaps.
 
 ## Calculation and limitations
 
@@ -83,7 +83,7 @@ Pen width changes preview/export stroke width; your physical pen determines actu
 
 ### Protein + lipid example
 
-Download [6BAJ.cif from RCSB](https://files.rcsb.org/download/6BAJ.cif): the *E. coli* AcrB membrane-protein trimer includes 31 phosphatidylethanolamine (`PTY`) residues, 11 hydrocarbon (`D12`) residues and one water. Load the file locally; protein ribbons and molecular bond lines render together. Give the `PTY` components a contrasting pen color to reveal lipids in the transmembrane region. Many lipids are only partially modeled, so this is not a complete surrounding bilayer. The small `tests/fixtures/6baj-lipid.cif` regression fixture retains one lipid's original coordinates and component bond definitions, with provenance in its header.
+Download [6BAJ.cif from RCSB](https://files.rcsb.org/download/6BAJ.cif): the *E. coli* AcrB membrane-protein trimer includes 31 phosphatidylethanolamine (`PTY`) residues, 11 hydrocarbon (`D12`) residues and one water. Load the file locally; protein ribbons and molecular bond lines render together. Use the **Lipids** checkbox and color picker to show/hide or recolor all 31 `PTY` components together. Increase **Lipid stroke** to make their bond lines more prominent without thickening the protein. Many lipids are only partially modeled, so this is not a complete surrounding bilayer. The small `tests/fixtures/6baj-lipid.cif` regression fixture retains one lipid's original coordinates and component bond definitions, with provenance in its header.
 
 ## Repository layout
 

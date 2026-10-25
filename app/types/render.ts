@@ -10,7 +10,7 @@ export interface BackboneSegment {
   chainId: string;
   residues: BackboneResidue[];
 }
-export type MoleculeCategory = "molecule" | "nucleic" | "water" | "ion";
+export type MoleculeCategory = "lipid" | "molecule" | "nucleic" | "water" | "ion";
 export interface Molecule {
   /** Selection/color ID; distinct from original protein chain IDs. */
   chainId: string;
@@ -37,6 +37,7 @@ export interface RenderOptions {
   rotation: Vec3;
   lines: number;
   penWidthMm: number;
+  lipidWidthMm: number;
   samples: number;
   fillLoops: boolean;
   loopSpacingMm: number;
@@ -114,6 +115,7 @@ export function defaultRenderOptions(): RenderOptions {
     rotation: [0, 0, 0],
     lines: 7,
     penWidthMm: 0.25,
+    lipidWidthMm: 0.8,
     samples: 16,
     fillLoops: true,
     loopSpacingMm: 0.15,

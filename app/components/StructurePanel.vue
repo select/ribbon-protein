@@ -3,6 +3,8 @@ import { computed, inject } from "vue";
 import type { Studio, StudioUi } from "../app.vue";
 import AppIcon from "./AppIcon.vue";
 import StudioSection from "./StudioSection.vue";
+import RangeField from "./RangeField.vue";
+import { moleculeGroups, selectMoleculeGroup, colorMoleculeGroup } from "../lib/molecule-groups";
 
 const studio = inject<Studio>("ribbon")!;
 const ui = inject<StudioUi>("ribbon-ui")!;
@@ -14,18 +16,12 @@ const busy = computed(() => studio.status === "loading");
 const chains = computed(() => studio.structure?.chains ?? []);
 const selected = computed(() => new Set(studio.options.selectedChains));
 const molecules = computed(() => new Map(studio.structure?.molecules?.map((m) => [m.chainId, m])));
-const categories = ["molecule", "nucleic", "ion", "water"] as const;
-function toggleCategory(category: string, on: boolean) {
-  const ids = new Set(
-    [...molecules.value.values()].filter((m) => m.category === category).map((m) => m.chainId),
-  );
-  studio.options.selectedChains = chains.value
-    .filter((c) => (ids.has(c.id) ? on : selected.value.has(c.id)))
-    .map((c) => c.id);
+const groups = computed(() => moleculeGroups(studio.structure?.molecules ?? []));
+function toggleGroup(ids: string[], on: boolean) {
+  if (studio.structure) selectMoleculeGroup(studio.options, studio.structure, ids, on);
 }
-function categorySelected(category: string) {
-  const entries = [...molecules.value.values()].filter((m) => m.category === category);
-  return entries.length > 0 && entries.every((m) => selected.value.has(m.chainId));
+function groupCount(ids: string[]) {
+  return ids.filter((id) => selected.value.has(id)).length;
 }
 const selectedCount = computed(
   () => chains.value.filter((chain) => selected.value.has(chain.id)).length,
@@ -148,25 +144,50 @@ function chainLabel(id: string): string {
           </div>
         </div>
 
-        <div v-if="molecules.size" class="molecule-categories">
-          <template v-for="category in categories" :key="category">
-            <label v-if="[...molecules.values()].some((m) => m.category === category)">
+        <div v-if="groups.length" class="molecule-categories">
+          <div
+            v-for="group in groups"
+            :key="group.category"
+            class="molecule-group"
+            :data-category="group.category"
+          >
+            <label>
               <input
                 type="checkbox"
-                :checked="categorySelected(category)"
-                @change="toggleCategory(category, ($event.target as HTMLInputElement).checked)"
+                :checked="groupCount(group.ids) === group.ids.length"
+                :indeterminate="
+                  groupCount(group.ids) > 0 && groupCount(group.ids) < group.ids.length
+                "
+                :aria-label="`Show all ${group.label.toLowerCase()}`"
+                @change="toggleGroup(group.ids, ($event.target as HTMLInputElement).checked)"
               />
-              {{
-                {
-                  molecule: "Molecules",
-                  nucleic: "DNA/RNA / other polymers",
-                  ion: "Single atoms",
-                  water: "Water",
-                }[category]
-              }}
+              {{ group.label }}
+              <span class="count rs-num">{{ groupCount(group.ids) }}/{{ group.ids.length }}</span>
             </label>
-          </template>
+            <input
+              type="color"
+              :value="colorOf(group.ids[0]!)"
+              :aria-label="`Color all ${group.label.toLowerCase()}`"
+              :title="`Apply color to all ${group.label.toLowerCase()}, including hidden components`"
+              @input="
+                colorMoleculeGroup(
+                  studio.options,
+                  group.ids,
+                  ($event.target as HTMLInputElement).value,
+                )
+              "
+            />
+          </div>
         </div>
+        <RangeField
+          v-if="groups.some((group) => group.category === 'lipid')"
+          v-model="studio.options.lipidWidthMm"
+          label="Lipid stroke"
+          unit="mm"
+          :min="0.1"
+          :max="2"
+          :step="0.05"
+        />
         <ul class="chain-list" aria-labelledby="chains-label">
           <li
             v-for="chain in chains"
@@ -231,15 +252,29 @@ function chainLabel(id: string): string {
 
 <style scoped>
 .molecule-categories {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 12px;
+  display: grid;
+  gap: 6px;
   font-size: 12px;
 }
-.molecule-categories label {
+.molecule-group {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.molecule-group label {
   display: flex;
   align-items: center;
   gap: 4px;
+  cursor: pointer;
+}
+.molecule-group input[type="color"] {
+  width: 28px;
+  height: 24px;
+  padding: 1px;
+  border: 1px solid var(--rs-line);
+  border-radius: 4px;
+  cursor: pointer;
 }
 
 .intake {

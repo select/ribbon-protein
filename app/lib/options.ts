@@ -1,6 +1,13 @@
 import type { RenderOptions, StructureData } from "../types/render";
 import { LIMITS } from "./limits";
 
+export function drawingPenWidth(o: RenderOptions, s: Pick<StructureData, "molecules">): number {
+  const hasLipids = s.molecules?.some(
+    (m) => m.category === "lipid" && o.selectedChains.includes(m.chainId),
+  );
+  return hasLipids ? Math.max(o.penWidthMm, o.lipidWidthMm) : o.penWidthMm;
+}
+
 /** Mirror the strict Rust boundary early so an invalid edit keeps the preview. */
 export function validateOptions(o: RenderOptions, s: StructureData): void {
   const range = (label: string, value: number, min: number, max: number, integer = false) => {
@@ -18,7 +25,8 @@ export function validateOptions(o: RenderOptions, s: StructureData): void {
   range("Height (mm)", o.heightMm, 10, 2000);
   range("Margin (mm)", o.marginMm, 0, 1000);
   range("Pen width (mm)", o.penWidthMm, 0.1, 2);
-  if (o.marginMm * 2 + o.penWidthMm >= Math.min(o.widthMm, o.heightMm))
+  range("Lipid stroke width (mm)", o.lipidWidthMm, 0.1, 2);
+  if (o.marginMm * 2 + drawingPenWidth(o, s) >= Math.min(o.widthMm, o.heightMm))
     throw new Error("Paper must be larger than twice the margin plus the pen width.");
   range("Interior lines", o.lines, 0, 20, true);
   range("Samples", o.samples, 2, 64, true);

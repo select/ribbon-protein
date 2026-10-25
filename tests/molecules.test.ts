@@ -58,6 +58,9 @@ describe("general non-protein molecules", () => {
     expect(s.molecules).toHaveLength(1);
     const lipid = s.molecules![0]!;
     expect(lipid.label).toBe("PTY · A 1101");
+    expect(lipid.category).toBe("lipid");
+    const namedLipid = await parseStructure(text.replaceAll("PTY", "XYZ"), "named-lipid.cif");
+    expect(namedLipid.molecules![0]!.category).toBe("lipid");
     expect(lipid.atoms).toHaveLength(50);
     expect(lipid.bonds).toHaveLength(49);
     [86.932, 83.763, 67.872].forEach((v, i) => expect(lipid.atoms[0]![i]).toBeCloseTo(v, 4));

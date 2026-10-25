@@ -61,6 +61,11 @@ struct Joined {
     warnings: Vec<String>,
 }
 
+fn is_lipid(structure: &StructureData, index: usize) -> bool {
+    index
+        .checked_sub(structure.segments.len())
+        .is_some_and(|i| structure.molecules[i].category == "lipid")
+}
 fn component_id(structure: &StructureData, index: usize) -> &str {
     if index < structure.segments.len() {
         &structure.segments[index].chain_id
@@ -228,7 +233,7 @@ fn draw(
         section_indices.extend(std::iter::repeat_n(index, paths.len()));
         sections.extend(paths);
     }
-    fit_page(&mut sections, o)?;
+    fit_page(&mut sections, o, o.max_pen_width(&request.structure))?;
     timings.project_ms = now() - started;
     if preview {
         warnings.push("Interaction preview: ribbon outlines and molecular bonds, without hidden-line removal. Refine before exporting.".into());
@@ -298,7 +303,7 @@ fn draw(
 }
 fn finish(request: &RenderRequest, joined: &Joined) -> Result<RenderResult, RenderError> {
     let o = &request.options;
-    let mut colors: BTreeMap<String, Vec<paths::Path>> = BTreeMap::new();
+    let mut colors: BTreeMap<(String, bool), Vec<paths::Path>> = BTreeMap::new();
     // Joining remains per segment, NOT per color. Rebuild color groups and
     // rerun ordering: a color change can merge/split groups and change travel.
     for (&index, paths) in joined.indices.iter().zip(&joined.paths) {
@@ -308,7 +313,7 @@ fn finish(request: &RenderRequest, joined: &Joined) -> Result<RenderResult, Rend
             .map(String::as_str)
             .unwrap_or("black");
         colors
-            .entry(color.to_owned())
+            .entry((color.to_owned(), is_lipid(&request.structure, index)))
             .or_default()
             .extend(paths.iter().cloned());
     }
@@ -400,7 +405,7 @@ impl RenderSession {
                         .cloned()
                         .unwrap_or_else(|| "black".into());
                     colors
-                        .entry(color)
+                        .entry((color, is_lipid(&self.request.structure, index)))
                         .or_insert_with(Vec::new)
                         .extend(paths.iter().cloned());
                 }
@@ -526,7 +531,11 @@ impl RenderSession {
 /// Final dimensions are already resolved by the UI. Never inspect paper or
 /// landscape to rotate/swap them a second time. Fit actual blended outlines,
 /// reserving half the physical stroke at each edge.
-fn fit_page(sections: &mut [Vec<ribbon::Section>], o: &RenderOptions) -> Result<(), RenderError> {
+fn fit_page(
+    sections: &mut [Vec<ribbon::Section>],
+    o: &RenderOptions,
+    stroke_width: f64,
+) -> Result<(), RenderError> {
     let mut low = [f64::INFINITY; 2];
     let mut high = [f64::NEG_INFINITY; 2];
     for section in sections.iter().flatten() {
@@ -545,8 +554,8 @@ fn fit_page(sections: &mut [Vec<ribbon::Section>], o: &RenderOptions) -> Result<
         return model::fail("Backbone projection is degenerate; cannot fit artwork to the page");
     }
     let available = [
-        o.width_mm - 2.0 * o.margin_mm - o.pen_width_mm,
-        o.height_mm - 2.0 * o.margin_mm - o.pen_width_mm,
+        o.width_mm - 2.0 * o.margin_mm - stroke_width,
+        o.height_mm - 2.0 * o.margin_mm - stroke_width,
     ];
     let scale = (available[0] / span[0].max(1e-12)).min(available[1] / span[1].max(1e-12));
     let middle = math::mul(math::add(low, high), 0.5);
@@ -583,7 +592,7 @@ fn xml(text: &str) -> String {
 
 fn make_result(
     request: &RenderRequest,
-    colors: BTreeMap<String, Vec<paths::Path>>,
+    colors: BTreeMap<(String, bool), Vec<paths::Path>>,
     residue_count: usize,
     warnings: Vec<String>,
 ) -> Result<RenderResult, RenderError> {
@@ -601,8 +610,18 @@ fn make_result(
         else { "Stroke directions optimized for pen-up travel" },
         o.pen_width_mm,
     );
-    for (i, (color, paths)) in colors.iter().enumerate() {
-        let _ = writeln!(svg, "<g id=\"pen-{}\" stroke=\"{}\">", i + 1, color);
+    for (i, ((color, lipid), paths)) in colors.iter().enumerate() {
+        if *lipid {
+            let _ = writeln!(
+                svg,
+                "<g id=\"pen-{}\" stroke=\"{}\" stroke-width=\"{}\">",
+                i + 1,
+                color,
+                o.lipid_width_mm
+            );
+        } else {
+            let _ = writeln!(svg, "<g id=\"pen-{}\" stroke=\"{}\">", i + 1, color);
+        }
         for path in paths {
             if let Some(first) = path.first() {
                 let _ = write!(svg, "<path d=\"M{:.4},{:.4}", first[0], first[1]);

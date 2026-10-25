@@ -84,6 +84,8 @@ pub struct RenderOptions {
     pub rotation: Vec3,
     pub lines: usize,
     pub pen_width_mm: f64,
+    #[serde(default = "default_lipid_width")]
+    pub lipid_width_mm: f64,
     pub samples: usize,
     pub fill_loops: bool,
     pub loop_spacing_mm: f64,
@@ -92,6 +94,24 @@ pub struct RenderOptions {
     pub stroke_direction: StrokeDirection,
     pub selected_chains: Vec<String>,
     pub chain_colors: BTreeMap<String, String>,
+}
+
+fn default_lipid_width() -> f64 {
+    0.8
+}
+
+impl RenderOptions {
+    pub(crate) fn max_pen_width(&self, structure: &StructureData) -> f64 {
+        if structure
+            .molecules
+            .iter()
+            .any(|m| m.category == "lipid" && self.selected_chains.contains(&m.chain_id))
+        {
+            self.pen_width_mm.max(self.lipid_width_mm)
+        } else {
+            self.pen_width_mm
+        }
+    }
 }
 
 impl Default for RenderOptions {
@@ -105,6 +125,7 @@ impl Default for RenderOptions {
             rotation: [0.0; 3],
             lines: 7,
             pen_width_mm: 0.25,
+            lipid_width_mm: default_lipid_width(),
             samples: 16,
             fill_loops: true,
             loop_spacing_mm: 0.15,
@@ -189,8 +210,11 @@ impl RenderRequest {
         if !bounded(o.pen_width_mm, 0.1, 2.0) {
             return fail("penWidthMm must be between 0.1 and 2 mm");
         }
+        if !bounded(o.lipid_width_mm, 0.1, 2.0) {
+            return fail("lipidWidthMm must be between 0.1 and 2 mm");
+        }
         if !bounded(o.margin_mm, 0.0, 1000.0)
-            || 2.0 * o.margin_mm + o.pen_width_mm >= o.width_mm.min(o.height_mm)
+            || 2.0 * o.margin_mm + o.max_pen_width(&self.structure) >= o.width_mm.min(o.height_mm)
         {
             return fail("Page dimensions must exceed twice marginMm plus penWidthMm");
         }
@@ -280,7 +304,8 @@ impl RenderRequest {
                 || !molecular_ids.insert(molecule.chain_id.as_str())
                 || s.segments.iter().any(|s| s.chain_id == molecule.chain_id)
                 || molecule.label.len() > 512
-                || !["molecule", "nucleic", "water", "ion"].contains(&molecule.category.as_str())
+                || !["lipid", "molecule", "nucleic", "water", "ion"]
+                    .contains(&molecule.category.as_str())
                 || molecule.atoms.is_empty()
             {
                 return fail("Molecules need distinct known component IDs, bounded labels, categories and atoms");

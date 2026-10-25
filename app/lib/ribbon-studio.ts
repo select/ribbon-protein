@@ -190,7 +190,11 @@ export function createRibbonStudio(runtime: RibbonRuntime, env: StudioEnvironmen
     options.selectedChains = next.chains
       .filter((chain) => !water.has(chain.id))
       .map((chain) => chain.id);
-    options.chainColors = {};
+    options.chainColors = Object.fromEntries(
+      (next.molecules ?? [])
+        .filter((m) => m.category === "lipid")
+        .map((m) => [m.chainId, "#c4302b"]),
+    );
     quiet = false;
     status.value = "idle";
     await render();

@@ -4,6 +4,16 @@ import type { ElementIndex } from "molstar/lib/mol-model/structure/model";
 import { SortedArray } from "molstar/lib/mol-data/int";
 import type { Molecule, Vec3 } from "../types/render";
 
+/** Mol* recognizes many simulation lipid names; CCD names cover experimental
+ * structures such as PTY, whose chem_comp.type is only `non-polymer`. */
+function isLipid(model: Model, compId: string, type: number | undefined): boolean {
+  if (type === 4 || compId === "PTY") return true;
+  const component = model.properties.chemicalComponentMap.get(compId);
+  return /phosphatid|cardiolipin|cholesterol|sphingomyelin|ceramide|diacylglycerol|triacylglycerol|glycolipid|lipopolysaccharide/i.test(
+    component?.name ?? "",
+  );
+}
+
 /** Heavy atoms only. No network/CCD fetches: Mol* uses file connectivity and
  * local component tables, with distance inference where definitions are absent.
  * Inferred contacts never join separate non-polymer residues. */
@@ -75,7 +85,15 @@ export function readMolecules(model: Model): Molecule[] {
             ? `${author || "(blank)"} · nucleic/other polymer`
             : `${h.atoms.label_comp_id.value(start)} · ${author || "(blank)"} ${h.residues.auth_seq_id.value(r)}${h.residues.pdbx_PDB_ins_code.value(r) || ""}`,
           category:
-            type === 2 ? "water" : polymer ? "nucleic" : indices.length === 1 ? "ion" : "molecule",
+            type === 2
+              ? "water"
+              : polymer
+                ? "nucleic"
+                : isLipid(model, h.atoms.label_comp_id.value(start), type)
+                  ? "lipid"
+                  : indices.length === 1
+                    ? "ion"
+                    : "molecule",
           atoms: [],
           bonds: [],
         };

@@ -56,11 +56,13 @@ describe.skipIf(!available)(
             );
             validateSvg(first.result.svg);
             expect(first.result.strokeCount > 0).toBe(selected.length > 0);
+            if (selected.length) expect(first.result.svg).toContain('stroke-width="0.8"');
             const scene = JSON.parse(session.preview_scene_json()) as PreviewScene;
             expect(scene.molecules?.length).toBe(selected.length ? 1 : 0);
             const drag = renderInteractionPreview(scene, options);
             expect(drag.svg).not.toMatch(/NaN|Infinity/);
             expect(drag.strokeCount > 0).toBe(selected.length > 0);
+            if (selected.length) expect(drag.svg).toContain('stroke-width="0.8"');
             options.chainColors[lipid.chains[0]!.id] = "red";
             const recolored = JSON.parse(
               session.render_options_json(JSON.stringify(options), false),
