@@ -8,6 +8,12 @@ Inspired by Michael Fogleman's [plotter work](https://www.michaelfogleman.com/pl
 
 **Files stay in your browser.** Mol* parses coordinates and computes secondary structure locally; a persistent Web Worker keeps the Rust/WASM renderer and prepared geometry in memory. Nuxt/Nitro only serves the app and its assets—there is no upload or calculation endpoint.
 
+## Studio preview
+
+![Ribbon Studio showing green fluorescent protein (GFP), PDB 1EMA, rendered as line-only ribbon artwork on A4 paper](docs/images/ribbon-studio-1ema-gfp.png)
+
+*The live studio rendering [GFP (PDB 1EMA)](https://www.rcsb.org/structure/1EMA), calculated entirely in the browser.*
+
 ## Run locally
 
 Requires Node.js 24, pnpm 11, Rust (stable) and wasm-pack:
