@@ -12,6 +12,14 @@ been superseded by local hydrogen-bond DSSP with chemical and fragment-aware
 handling; see [DSSP correction notes](web-dssp.md). The old no-push milestone below
 records the original plan, not the subsequent authorized Pages publication.
 
+The performance follow-up is also complete: persistent worker/WASM sessions,
+bounded latest-request-wins scheduling, prepared geometry/PCA and exact color
+caches, options-only warm requests, and a real-3D interaction preview with
+exact-final-only exports. See [current architecture and measured validation](web-performance.md).
+Byte equality is required against the corrected pre-optimization Rust/WASM
+renderer; the original cross-language parity caveat below is historical and
+still applies to the older reference implementation.
+
 ## Goal
 
 Replace the Python-first entry point with a minimal Nuxt 4 application. Nuxt/Nitro serves the application; molecular files and rendering never leave the browser. Use Rust compiled to WebAssembly in a module Web Worker for the custom ribbon/plotter calculation. Keep Python as a readable reference and regression oracle, not a web dependency.
@@ -58,6 +66,10 @@ docs/                      # design, limitations and migration notes
 Root Nuxt configuration, package scripts and pnpm lockfile. Rust workspace at root, with engine in `crates/ribbon-core`. Prefer `wasm-pack --target web`, explicit browser module loading compatible with workers and Nuxt base URLs. No Python subprocess, server-side calculation, SaaS, CDN scripts or external font dependency. Transfer normalized structures into Rust; keep geometry in memory rather than serializing an intermediate SVG.
 
 ### Shared boundary
+
+The following describes the initial stateless contract, retained for tests and
+compatibility. The current worker uses a revisioned `RenderSession` with
+options-only requests; see [the stateful boundary](web-performance.md).
 
 `app/types/render.ts` is authoritative for JSON field names. Rust exports `render_json(request: &str) -> Result<String, JsValue>`; native tests use the same request/response structs and pure render function. Request consists of normalized `StructureData` and `RenderOptions`. Result includes SVG, dimensions, statistics and warnings. Use finite f64 math internally and strict bounded option validation at the Rust boundary.
 

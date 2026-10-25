@@ -1,6 +1,37 @@
 # Web implementation validation
 
-## Hydrogen-bond DSSP correction
+## Performance follow-up (current)
+
+The persistent worker/WASM, bounded latest-request-wins scheduler, prepared
+geometry/PCA cache, options-only boundary, exact color fast path and actual-3D
+interaction preview are implemented. See [architecture, timings, benchmark method
+and exact-output validation](web-performance.md). This supersedes the initial
+cold-worker/dragging behavior described by the historical sections below.
+
+- `pnpm check`: **63 tests passed**, including generated-WASM cases (none skipped),
+  lint with zero warnings/errors and app/test typechecking.
+- `cargo fmt --all -- --check`, clippy with `-D warnings` and **32 native tests**
+  passed. Actual `pnpm build:wasm` / `pnpm test:wasm`, formatting, production build
+  and Pages generation were checked; retained upstream build notices are non-failing.
+- **74 real-structure old/new stateless/session cases** and **34 production-browser
+  SVGs** matched exactly. No DSSP code or labels were changed; 1EZG still has
+  H0/E38/C126 and broad sheets. Empty/reordered/duplicate selections, pen extremes,
+  paper, color merge/split, travel ordering and invalidation are covered.
+- Browser checks passed persistent module/structure reuse, coordinate-free warm
+  messages, bounded rapid changes, continuous preview and exact release, stale
+  SVG/PNG prevention, real downloads, hard cancellation/rehydration, injected
+  worker-error recovery and replacement during active work. Mobile 390 × 844
+  checks included real touch, touch cancellation/lost capture, keyboard reset,
+  drawer/focus and top-right repository link. No browser/HTTP errors or uploads
+  occurred in the local static Pages run; screenshots/exported PNG were opened.
+  Fresh-cache isolated development loading also passed with no document or
+  dependency-discovery reload. PNG pixels matched the exported exact SVG raster.
+
+This section records local validation; remote workflow/public-site results are
+reported separately after publication. The timings are load-sensitive, not a
+promise of realtime exact rendering. No reference-language behavior was changed.
+
+## Hydrogen-bond DSSP correction (preceding validation)
 
 The CA-geometry assignment in the initial validation below is **superseded**.
 The current worker computes hydrogen-bond DSSP using Mol* stages with explicit
@@ -103,7 +134,7 @@ The common ribbon/loop style is retained, but **this is not exact output parity*
 ## Follow-up scope
 
 - **Completed:** hydrogen-bond DSSP in the browser, preserving residue identity and inter-chain contacts. Remaining implementation-specific boundaries/bulges are documented in [DSSP notes](web-dssp.md).
-- Reuse idle workers/cache geometry or add a cheaper interaction preview if full-quality rotation latency is too high. Current hard cancellation is correct but can incur worker startup costs.
+- **Completed:** persistent worker/WASM, bounded scheduling and caches, options-only warm messages, exact color fast path and actual-3D preview with exact-final-only exports. See [performance notes](web-performance.md). Explicit hard cancellation still drops worker-local caches; normal option edits do not.
 - Add a maintained automated browser suite and test Firefox/Safari; current browser validation is Chrome-based.
 - Multi-structure alignment, biological assemblies, persistent projects and plotter-specific machine output remain outside this first version.
 - At very small coaster margins, fitting is still to a rectangle, not geometrically clipped to the rounded substrate; the UI warns below 3.14 mm. Default 5 mm is conservative.

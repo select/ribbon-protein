@@ -11,7 +11,10 @@ Changing stroke width, camera or forcing sheet labels would not fix the cause.
 The corrected worker uses **hydrogen-bond DSSP**, retaining the Rust geometry,
 PCA convention, ink defaults and client-only architecture. It does not depend on
 file HELIX/SHEET annotations or a hosted service. Selection, assignment and WASM
-rendering all remain inside the cancellable, two-minute worker job.
+rendering all remain local. Parsing, assignment and exact rendering run in a
+persistent worker, with a two-minute timeout per active job and explicit hard
+cancellation. Warm renders reuse normalized coordinates and DSSP labels; see the
+[worker/cache and interaction-preview lifecycle](web-performance.md).
 
 ## Mol* API and chemical/topological adapter
 

@@ -6,7 +6,7 @@ Turn local protein structures into editable, line-only SVG artwork for a pen plo
 
 Inspired by Michael Fogleman's [plotter work](https://www.michaelfogleman.com/plotter/) and [original ribbon repository](https://github.com/fogleman/ribbon). This is a separate browser-based implementation, not his Go library.
 
-**Files stay in your browser.** Mol* parses coordinates and computes secondary structure locally; a Web Worker runs the Rust renderer. Nuxt/Nitro only serves the app and its assets—there is no upload or calculation endpoint.
+**Files stay in your browser.** Mol* parses coordinates and computes secondary structure locally; a persistent Web Worker keeps the Rust/WASM renderer and prepared geometry in memory. Nuxt/Nitro only serves the app and its assets—there is no upload or calculation endpoint.
 
 ## Run locally
 
@@ -51,9 +51,9 @@ This selects the GitHub Pages preset and `/ribbon-protein/` base path, including
    - **A3:** 297 × 420 mm.
    - **Bierdeckel / Coaster:** 93.14 × 93.14 mm canvas containing one 92.74 mm rounded-square guide with 10 mm corners, extracted from the supplied plotter template. Default artwork margin: 5 mm.
    - **Custom:** explicit width and height; swap dimensions to rotate the page.
-4. Drag the paper or adjust X/Y/Z rotation. With the preview focused, use arrow keys, Shift for 15° steps, `[` / `]` for Z, and Home or `0` to reset.
+4. Drag the paper for a lightweight, actual-3D contour preview; release to refine the exact drawing. Or adjust X/Y/Z rotation. With the preview focused, use arrow keys, Shift for 15° steps, `[` / `]` for Z, and Home or `0` to reset.
 5. Set **Interior lines** (0–20) and **Pen width** (0.1–2 mm; default 0.25 mm). Advanced settings control loop fill, loop/border spacing, border passes, spline samples and path direction.
-6. Download **SVG** for plotting/editing or **PNG** for a white-paper preview. Exports remain disabled until the preview matches the current settings. Cancel interrupts the worker; changing options or retrying starts a fresh calculation.
+6. Download **SVG** for plotting/editing or **PNG** for a white-paper preview. Only the current, exact full-quality result can be exported—not a stale result or interaction preview. **Cancel** interrupts the worker; the next render restores the normalized structure without parsing or assigning DSSP again.
 
 Guides belong to the preview and are **never exported**. The coaster export is a square SVG canvas, not a mask or a cutting template. The default 5 mm margin keeps the artwork inside the rounded guide; reducing the margin can put ink outside the physical coaster near its corners.
 
@@ -69,8 +69,9 @@ Pen width changes preview/export stroke width; your physical pen determines actu
 - **Secondary structure uses local hydrogen-bond DSSP with Mol* stages**, computed from coordinates even without HELIX/SHEET annotations. Chemical residue identities (including proline), coherent conformers and peptide breaks are retained; all selected fragments share hydrogen-bond contacts, including inter-chain sheets. Original helix conventions are simplified as H/G/I → H and E/B → E. Incomplete backbones, unusual residue chemistry, helix boundaries and beta-bulge conventions can still differ between DSSP implementations. Computation failures are errors, never a silent all-loop fallback. See [assignment details and public reference comparisons](docs/web-dssp.md).
 - Rust handles ribbon smoothing, continuous loop/ribbon tracks, inset borders, projection, spatially indexed hidden-line trimming, stroke welding/joining, simplification and ordering. This is an artistic ribbon illustration, not a molecular surface renderer.
 - Visibility uses **average panel depth**, so intersecting or strongly twisted surfaces may have local occlusion artifacts. PCA orientation, full-precision geometry, page fitting and secondary-structure assignment all affect the final illustration.
-- Rendering is debounced rather than guaranteed realtime during dragging. The previous preview remains visible but marked stale during calculation.
-- Browser input limits: 20 MiB per file, 250,000 atoms, 10,000 residues and 512 backbone fragments (including contact-only fragments). The engine additionally caps spline samples, track count, clipping and path-processing work. Oversized drawings fail with a message instead of silently reducing quality. DSSP contact/ladder work is also bounded. Browser jobs time out after two minutes.
+- Dragging uses bounded 3D contours without hidden-line removal; **Preview · exports paused** identifies this approximate view. Release computes the unchanged full-quality artwork (**Refining**). Discrete controls are debounced; obsolete requests are coalesced rather than restarting the worker. Exact rendering is not guaranteed realtime.
+- **Response** measures options/file-to-result latency, including debounce and queue wait; once the SVG loads it includes an approximate display delay. Hover for WASM-call and stage timings. It is not just Rust compute time or a hardware paint measurement.
+- Browser input limits: 20 MiB per file, 250,000 atoms, 10,000 residues and 512 backbone fragments (including contact-only fragments). The engine additionally caps spline samples, track count, clipping and path-processing work. Oversized drawings fail with a message instead of silently reducing quality. DSSP contact/ladder work is also bounded. Active browser jobs time out after two minutes; waiting in the single newest-request slot does not consume that timeout.
 - No multi-structure alignment, G-code, file persistence or account system in this first version. Mol* remains available for future alignment features.
 
 ## Repository layout
@@ -87,7 +88,7 @@ docs/                   Implementation plan and validation notes
 output/                 Existing local structures/renders (ignored, not moved)
 ```
 
-See [the implementation plan](docs/web-plan.md) for the architecture and milestone scope, and [validation notes](docs/web-validation.md) for verified checks and rendering limitations.
+See [performance architecture, exact-output checks and measured before/after results](docs/web-performance.md), [the implementation plan](docs/web-plan.md) for milestone scope, and [validation notes](docs/web-validation.md) for verified checks and rendering limitations.
 
 ## Checks and Git hooks
 
