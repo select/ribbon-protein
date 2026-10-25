@@ -37,6 +37,13 @@ to a server for parsing or rendering.
 
 ## Validation
 
+For web changes, run `pnpm check` (lint, typecheck and runtime tests), `pnpm fmt:check`
+and `pnpm build`. Build WASM before testing its integration: `pnpm build:wasm` and
+`pnpm test:wasm`. For Rust changes, also run `cargo fmt --all -- --check`,
+`cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace`.
+Do not claim actual WASM integration coverage when the generated-module tests were
+skipped. Verify significant UI changes in a browser, including mobile controls.
+
 Run the unit tests after changing Python behavior:
 
 ```bash

@@ -1,5 +1,14 @@
 # Client-side ribbon studio — implementation plan
 
+## Delivery status
+
+The initial implementation is complete: Nuxt SPA/tooling, the Rust/WASM core,
+worker-local parsing, responsive studio controls, physical SVG/PNG exports and
+Python-reference reorganization are implemented. See [validation notes](web-validation.md)
+for verified checks, parity differences and follow-up scope. The sections below
+record the original implementation plan; exact DSSP parity and alignment remain
+explicitly outside this first delivery.
+
 ## Goal
 
 Replace the Python-first entry point with a minimal Nuxt 4 application. Nuxt/Nitro serves the application; molecular files and rendering never leave the browser. Use Rust compiled to WebAssembly in a module Web Worker for the custom ribbon/plotter calculation. Keep Python as a readable reference and regression oracle, not a web dependency.
@@ -37,10 +46,10 @@ public/templates/          # standalone coaster guide: coordinator
 public/examples/           # small synthetic fixtures: runtime agent
 public/wasm/               # generated wasm-pack artifacts, ignored
 scripts/                   # WASM build + verification helpers: runtime agent
- tests/                    # TS tests: runtime agent
+tests/                     # TS tests: runtime agent
 legacy/python/             # original Python scripts and tests: coordinator
 legacy/python/README.md    # original usage documentation
- docs/                     # design, limitations and migration notes
+docs/                      # design, limitations and migration notes
 ```
 
 Root Nuxt configuration, package scripts and pnpm lockfile. Rust workspace at root, with engine in `crates/ribbon-core`. Prefer `wasm-pack --target web`, explicit browser module loading compatible with workers and Nuxt base URLs. No Python subprocess, server-side calculation, SaaS, CDN scripts or external font dependency. Transfer normalized structures into Rust; keep geometry in memory rather than serializing an intermediate SVG.
