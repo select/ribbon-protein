@@ -4,7 +4,7 @@ use crate::model::{
     fail, BackboneSegment, RenderError, RenderOptions, SecondaryStructure, MAX_EDGES, MAX_TRACKS,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub(crate) struct Sample {
     pub point: V3,
     pub side: V3,

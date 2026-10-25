@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
-import type { Vec3 } from "~/types/render";
+import type { RenderResult, Vec3 } from "~/types/render";
 import type { Studio, StudioUi } from "../app.vue";
 import AppIcon from "./AppIcon.vue";
 
@@ -66,7 +66,7 @@ const marginStyle = computed(() => {
 const svgUrl = ref<string | null>(null);
 
 watch(
-  () => studio.result?.svg ?? null,
+  () => studio.displayResult?.svg ?? null,
   (svg) => {
     if (svgUrl.value) URL.revokeObjectURL(svgUrl.value);
     svgUrl.value = svg ? URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" })) : null;
@@ -74,26 +74,53 @@ watch(
   { immediate: true },
 );
 
+function onArtworkLoad(event: Event) {
+  const img = event.currentTarget as HTMLImageElement;
+  const shown = studio.displayResult as RenderResult | null;
+  if (!shown || img.currentSrc !== svgUrl.value) return;
+  // Image load includes SVG decode. The next frame approximates presentation,
+  // not a guarantee about compositor/hardware scanout time.
+  requestAnimationFrame(() => {
+    if (img.currentSrc === svgUrl.value) studio.markDisplayed(shown);
+  });
+}
+
 /* ---------------------------------------------------------- drag to rotate */
 
 const DEG_PER_PX = 0.5;
-let drag: { pointerId: number; x: number; y: number; start: Vec3 } | null = null;
+let drag: { pointerId: number; x: number; y: number; start: Vec3; element: HTMLElement } | null =
+  null;
 const dragging = ref(false);
+
+watch(
+  () => studio.interacting,
+  (active) => {
+    // Explicit Cancel, file replacement or reset can settle a captured gesture.
+    if (active || !drag) return;
+    const { element, pointerId } = drag;
+    drag = null;
+    dragging.value = false;
+    if (element.hasPointerCapture(pointerId)) element.releasePointerCapture(pointerId);
+  },
+  { flush: "sync" },
+);
 
 function wrap(angle: number): number {
   return Math.round(((((angle + 180) % 360) + 360) % 360) - 180);
 }
 
 function onPointerDown(event: PointerEvent) {
-  if (!studio.structure || event.button !== 0) return;
+  if (!studio.structure || studio.status === "loading" || event.button !== 0 || drag) return;
   (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
   drag = {
     pointerId: event.pointerId,
     x: event.clientX,
     y: event.clientY,
     start: [...studio.options.rotation] as Vec3,
+    element: event.currentTarget as HTMLElement,
   };
   dragging.value = true;
+  studio.beginInteraction();
 }
 
 function onPointerMove(event: PointerEvent) {
@@ -113,6 +140,7 @@ function onPointerUp(event: PointerEvent) {
   if (!drag || event.pointerId !== drag.pointerId) return;
   drag = null;
   dragging.value = false;
+  studio.endInteraction();
 }
 
 function onKeydown(event: KeyboardEvent) {
@@ -170,6 +198,8 @@ const previewLabel = computed(() => {
 });
 
 onBeforeUnmount(() => {
+  if (drag) studio.endInteraction();
+  drag = null;
   observer?.disconnect();
   if (svgUrl.value) URL.revokeObjectURL(svgUrl.value);
 });
@@ -229,7 +259,15 @@ onBeforeUnmount(() => {
       @lostpointercapture="onPointerUp"
       @keydown="onKeydown"
     >
-      <img v-if="svgUrl" class="art" :src="svgUrl" alt="" draggable="false" />
+      <img
+        v-if="svgUrl"
+        class="art"
+        :data-quality="studio.displayResult?.quality ?? 'final'"
+        :src="svgUrl"
+        alt=""
+        draggable="false"
+        @load="onArtworkLoad"
+      />
 
       <div v-if="ui.showGuides" class="guide-margin" :style="marginStyle" aria-hidden="true" />
 

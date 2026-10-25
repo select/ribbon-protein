@@ -95,7 +95,14 @@ fn prepare(request: &RenderRequest) -> Prepared {
         warnings.push("Some carbonyl directions are parallel to the backbone; stable transported fallback frames were used.".into());
     }
     let all_points: Vec<_> = ribbons.iter().flatten().map(|s| s.point).collect();
-    let camera = math::Camera::new(&all_points, [0.0; 3]);
+    let camera = if all_points.is_empty() {
+        math::Camera {
+            center: [0.0; 3],
+            basis: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        }
+    } else {
+        math::Camera::new(&all_points, [0.0; 3])
+    };
     Prepared {
         samples: request.options.samples,
         indices,
@@ -175,7 +182,7 @@ fn draw(
             .iter()
             .map(Vec::len)
             .sum::<usize>()
-            .div_ceil(4000)
+            .div_ceil(800)
             .max(1)
     } else {
         1
@@ -396,6 +403,66 @@ impl RenderSession {
         let structure =
             serde_json::from_str(structure).map_err(|e| format!("Invalid structure JSON: {e}"))?;
         Self::new(structure).map_err(|e| e.to_string())
+    }
+    /// Small actual 3D ribbon scene for responsive main-thread interaction while
+    /// synchronous full-quality WASM is busy. Full-sample PCA is retained.
+    pub fn preview_scene_json(&mut self) -> Result<String, String> {
+        self.request.validate().map_err(|e| e.to_string())?;
+        let indices = selected_indices(&self.request);
+        let index = self
+            .prepared
+            .iter()
+            .position(|p| p.samples == self.request.options.samples && p.indices == indices);
+        let index = if let Some(index) = index {
+            index
+        } else {
+            if self.prepared.len() == 2 {
+                self.prepared.pop_back();
+            }
+            self.prepared.push_front(prepare(&self.request));
+            0
+        };
+        let prepared = &self.prepared[index];
+        #[derive(serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct SceneRibbon<'a> {
+            chain_id: &'a str,
+            samples: Vec<&'a ribbon::Sample>,
+        }
+        #[derive(serde::Serialize)]
+        struct Scene<'a> {
+            center: math::V3,
+            basis: [math::V3; 3],
+            ribbons: Vec<SceneRibbon<'a>>,
+        }
+        let stride = prepared
+            .ribbons
+            .iter()
+            .map(Vec::len)
+            .sum::<usize>()
+            .div_ceil(800)
+            .max(1);
+        let ribbons = prepared
+            .indices
+            .iter()
+            .zip(&prepared.ribbons)
+            .map(|(&index, samples)| {
+                let mut sparse: Vec<_> = samples.iter().step_by(stride).collect();
+                if (samples.len() - 1) % stride != 0 {
+                    sparse.push(samples.last().unwrap());
+                }
+                SceneRibbon {
+                    chain_id: &self.request.structure.segments[index].chain_id,
+                    samples: sparse,
+                }
+            })
+            .collect();
+        serde_json::to_string(&Scene {
+            center: prepared.camera.center,
+            basis: prepared.camera.basis,
+            ribbons,
+        })
+        .map_err(|e| e.to_string())
     }
     pub fn render_options_json(&mut self, options: &str, preview: bool) -> Result<String, String> {
         if options.len() > 1024 * 1024 {

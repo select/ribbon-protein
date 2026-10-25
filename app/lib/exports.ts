@@ -29,6 +29,8 @@ export function exportFileName(name: string, extension: "svg" | "png"): string {
   return `${stem || "ribbon"}.${extension}`;
 }
 export function svgBlob(result: RenderResult): Blob {
+  if (result.quality === "preview")
+    throw new Error("Interaction previews cannot be exported. Wait for exact refinement.");
   validateSvg(result.svg);
   return new Blob([result.svg], { type: "image/svg+xml;charset=utf-8" });
 }

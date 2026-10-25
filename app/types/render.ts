@@ -39,6 +39,36 @@ export interface RenderRequest {
   structure: StructureData;
   options: RenderOptions;
 }
+export interface PreviewScene {
+  center: Vec3;
+  basis: [Vec3, Vec3, Vec3];
+  ribbons: {
+    chainId: string;
+    samples: { point: Vec3; side: Vec3; width: number; alpha: number }[];
+  }[];
+}
+export interface RenderTimings {
+  /** Per-worker diagnostic counters; reset only after hard recreation. */
+  moduleInitializations?: number;
+  structureLoads?: number;
+  parses?: number;
+  structureRevision?: number;
+  startupMs?: number;
+  moduleInitMs?: number;
+  structureLoadMs?: number;
+  parseDsspMs?: number;
+  prepareMs?: number;
+  projectMs?: number;
+  clipMs?: number;
+  pathsMs?: number;
+  finishMs?: number;
+  geometryCacheHit?: boolean;
+  pathCacheHit?: boolean;
+  roundtripMs?: number;
+  responseMs?: number;
+  imageDecodeMs?: number;
+  visibleMs?: number;
+}
 export interface RenderResult {
   svg: string;
   widthMm: number;
@@ -46,7 +76,12 @@ export interface RenderResult {
   strokeCount: number;
   lengthMm: number;
   residueCount: number;
+  /** Final: WASM calls + JSON decoding; preview: local contour compute. Not end-to-end. */
   elapsedMs: number;
+  quality?: "preview" | "final";
+  /** Bounded prepared 3D outline scene, transferred only when its key changes. */
+  previewScene?: PreviewScene;
+  timings?: RenderTimings;
   warnings: string[];
 }
 export type RenderStatus = "idle" | "loading" | "rendering" | "ready" | "error";

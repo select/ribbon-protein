@@ -14,6 +14,11 @@ describe.skipIf(!available)(
   "real parser → web-target WASM integration (run pnpm build:wasm first)",
   () => {
     let renderJson: (request: string) => string;
+    let Session: new (structure: string) => {
+      render_options_json(options: string, preview: boolean): string;
+      preview_scene_json(): string;
+      free(): void;
+    };
     beforeAll(async () => {
       const wasm = await import(/* @vite-ignore */ moduleUrl.href);
       await wasm.default({
@@ -22,7 +27,57 @@ describe.skipIf(!available)(
         ),
       });
       renderJson = wasm.render_json;
+      Session = wasm.RenderSession;
     });
+    it.each(["1ezg-backbone.pdb", "1mbn-backbone.pdb"])(
+      "retains scientific %s geometry with exact stateful/stateless cache parity",
+      async (name) => {
+        const text = await readFile(new URL(`./fixtures/dssp/${name}`, import.meta.url), "utf8");
+        const structure = await parseStructure(text, name);
+        const options = defaultRenderOptions();
+        options.samples = 8;
+        options.selectedChains = structure.chains.map((c) => c.id);
+        const session = new Session(JSON.stringify(structure));
+        try {
+          for (const rotation of [
+            [0, 0, 0],
+            [31, -45, 12],
+          ] as [number, number, number][]) {
+            options.rotation = rotation;
+            const preview = JSON.parse(session.render_options_json(JSON.stringify(options), true));
+            expect(preview.timings.clipMs).toBe(0);
+            expect(preview.result.svg).toContain("Hidden strokes are NOT removed");
+            const scene = JSON.parse(session.preview_scene_json());
+            expect(scene.ribbons.length).toBe(structure.segments.length);
+            expect(
+              scene.ribbons.reduce(
+                (n: number, r: { samples: unknown[] }) => n + r.samples.length,
+                0,
+              ),
+            ).toBeLessThanOrEqual(800 + 2 * structure.segments.length);
+            expect(JSON.stringify(scene)).not.toMatch(/null|NaN|Infinity/);
+            for (const color of ["black", "red", "#12aBC3"]) {
+              options.chainColors = { [structure.chains[0]!.id]: color };
+              const actual = JSON.parse(
+                session.render_options_json(JSON.stringify(options), false),
+              );
+              expect(actual.result).toEqual(
+                JSON.parse(renderJson(JSON.stringify({ structure, options }))),
+              );
+              expect(actual.timings.pathCacheHit).toBe(color !== "black");
+            }
+          }
+          if (name.startsWith("1ezg")) {
+            expect(
+              structure.segments.flatMap((s) => s.residues).filter((r) => r.kind === "E"),
+            ).toHaveLength(38);
+          }
+        } finally {
+          session.free();
+        }
+      },
+      30_000,
+    );
     it.each(["1crn-backbone.pdb", "1crn-backbone.cif"])(
       "renders %s with computed H/E, line-only physical SVG and option changes",
       async (name) => {

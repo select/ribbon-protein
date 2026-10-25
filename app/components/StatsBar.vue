@@ -64,14 +64,38 @@ const stats = computed(() => {
     { label: "Strokes", value: result.strokeCount.toLocaleString() },
     { label: "Pen distance", value: formatLength(result.lengthMm) },
     { label: "Residues", value: result.residueCount.toLocaleString() },
-    { label: "Render", value: formatTime(result.elapsedMs) },
+    {
+      label: "Response",
+      value: formatTime(
+        result.timings?.visibleMs ?? result.timings?.responseMs ?? result.elapsedMs,
+      ),
+    },
   ];
+});
+const timingDetail = computed(() => {
+  const r = studio.result;
+  const t = r?.timings;
+  if (!r || !t) return "WASM computation only (legacy timing)";
+  return [
+    `WASM call ${formatTime(r.elapsedMs)}`,
+    `module init ${formatTime(t.moduleInitMs ?? 0)}`,
+    `parse/DSSP ${formatTime(t.parseDsspMs ?? 0)}`,
+    `structure load ${formatTime(t.structureLoadMs ?? 0)}`,
+    `geometry ${formatTime(t.prepareMs ?? 0)}${t.geometryCacheHit ? " (cached)" : ""}`,
+    `project ${formatTime(t.projectMs ?? 0)}`,
+    `clip ${formatTime(t.clipMs ?? 0)}`,
+    `join ${formatTime(t.pathsMs ?? 0)}`,
+    `order/SVG ${formatTime(t.finishMs ?? 0)}${t.pathCacheHit ? " (cached paths)" : ""}`,
+    `worker roundtrip ${formatTime(t.roundtripMs ?? 0)}`,
+    `image/frame ${formatTime(t.imageDecodeMs ?? 0)}`,
+    "Response includes debounce/queue; image/frame is approximate presentation timing",
+  ].join(" · ");
 });
 </script>
 
 <template>
   <footer v-if="studio.structure" class="stats" aria-label="Render statistics">
-    <dl class="list" :class="{ 'is-stale': studio.isStale }">
+    <dl class="list" :class="{ 'is-stale': studio.isStale }" :title="timingDetail">
       <div v-for="item in stats" :key="item.label" class="item">
         <dt>{{ item.label }}</dt>
         <dd class="rs-num">{{ item.value }}</dd>

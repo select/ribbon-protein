@@ -47,6 +47,11 @@ describe("line-only SVG and PNG export helpers", () => {
     await expect(pngBlob(result)).rejects.toThrow(/decode failed/);
     expect(revoke).toHaveBeenCalledWith("blob:failed");
   });
+  it("rejects interaction previews at both export boundaries", async () => {
+    const preview = { ...result, quality: "preview" as const };
+    expect(() => svgBlob(preview)).toThrow(/cannot be exported/);
+    await expect(pngBlob(preview)).rejects.toThrow(/cannot be exported/);
+  });
   it("preserves actual SVG bytes, physical dimensions and safe filenames", async () => {
     const blob = svgBlob(result);
     expect(blob.type).toBe("image/svg+xml;charset=utf-8");

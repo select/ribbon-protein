@@ -9,9 +9,13 @@ const ui = inject<StudioUi>("ribbon-ui")!;
 const exporting = ref<"svg" | "png" | null>(null);
 const exportError = ref<string | null>(null);
 
-const busy = computed(() => studio.status === "loading" || studio.status === "rendering");
+const busy = computed(
+  () => studio.interacting || studio.status === "loading" || studio.status === "rendering",
+);
 
 const status = computed(() => {
+  if (studio.interacting) return { tone: "pending", text: "Preview · exports paused" };
+  if (studio.previewResult && studio.status !== "error") return { tone: "busy", text: "Refining" };
   switch (studio.status) {
     case "loading":
       return { tone: "busy", text: "Reading structure" };

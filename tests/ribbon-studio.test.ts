@@ -8,7 +8,8 @@ import { deferred, result, structure } from "./helpers";
 function harness() {
   const runtime = {
     parse: vi.fn().mockResolvedValue(structure),
-    render: vi.fn().mockResolvedValue(result),
+    render: vi.fn().mockImplementation(async () => structuredClone(result)),
+    invalidate: vi.fn(),
     cancel: vi.fn(),
     dispose: vi.fn(),
   } satisfies RibbonRuntime;
@@ -60,10 +61,11 @@ describe("useRibbon reactive runtime", () => {
   it("keeps the last preview on invalid options and treats empty selection as none", async () => {
     const h = harness();
     await h.studio.loadFile(file());
+    const previous = h.studio.result.value;
     h.studio.options.widthMm = NaN;
     await vi.advanceTimersByTimeAsync(180);
     expect(h.studio.status.value).toBe("error");
-    expect(h.studio.result.value).toEqual(result);
+    expect(h.studio.result.value).toBe(previous);
     expect(h.studio.error.value).toMatch(/Width/);
     expect(h.studio.isStale.value).toBe(true);
     h.studio.options.widthMm = 210;
@@ -157,6 +159,146 @@ describe("useRibbon reactive runtime", () => {
     expect(h.runtime.render).toHaveBeenCalledOnce();
     expect(h.runtime.dispose).toHaveBeenCalledOnce();
   });
+  it("keeps interaction previews display-only and refines exact options immediately on release", async () => {
+    const h = harness();
+    await h.studio.loadFile(file());
+    const exact = h.studio.result.value;
+    h.studio.beginInteraction();
+    h.studio.options.rotation = [10, 20, 0];
+    expect(h.studio.isStale.value).toBe(true);
+    await vi.advanceTimersByTimeAsync(24);
+    expect(h.runtime.render.mock.calls.at(-1)?.[1]).toBe("preview");
+    expect(h.studio.previewResult.value?.quality).toBe("preview");
+    expect(h.studio.result.value).toBe(exact);
+    h.studio.downloadSvg();
+    await h.studio.downloadPng();
+    expect(h.save).not.toHaveBeenCalled();
+    const final = deferred<RenderResult>();
+    h.runtime.render.mockReturnValueOnce(final.promise);
+    h.studio.endInteraction();
+    expect(h.runtime.render.mock.calls.at(-1)?.[1]).toBe("final");
+    expect(h.studio.status.value).toBe("rendering");
+    expect(h.studio.isStale.value).toBe(true);
+    final.resolve({ ...result, strokeCount: 456 });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.studio.previewResult.value).toBeNull();
+    expect(h.studio.result.value?.strokeCount).toBe(456);
+    expect(h.studio.isStale.value).toBe(false);
+    expect(h.runtime.cancel).not.toHaveBeenCalled();
+    h.dispose();
+  });
+  it("uses bounded prepared 3D contours locally during dragging, without starving behind active wasm", async () => {
+    const h = harness();
+    const scene = {
+      center: [0, 0, 0] as [number, number, number],
+      basis: [
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1],
+      ] as [[number, number, number], [number, number, number], [number, number, number]],
+      ribbons: [
+        {
+          chainId: "A",
+          samples: structure.segments[0]!.residues.map((r) => ({
+            point: r.ca,
+            side: r.carbonyl,
+            width: 0.2,
+            alpha: 1,
+          })),
+        },
+      ],
+    };
+    h.runtime.render.mockResolvedValueOnce({ ...result, previewScene: scene });
+    await h.studio.loadFile(file());
+    const exact = h.studio.result.value;
+    const active = deferred<RenderResult>();
+    h.runtime.render.mockReturnValueOnce(active.promise);
+    const old = h.studio.render();
+    h.studio.beginInteraction();
+    // Faster than a frame: trailing debounce would starve every preview here.
+    for (let i = 1; i <= 40; i++) {
+      h.studio.options.rotation = [i, 2 * i, 0];
+      await vi.advanceTimersByTimeAsync(4);
+      if (i >= 4) expect(h.studio.previewResult.value?.quality).toBe("preview");
+    }
+    expect(h.runtime.render).toHaveBeenCalledTimes(2); // initial + obsolete active full only
+    expect(h.studio.result.value).toBe(exact);
+    h.studio.endInteraction();
+    await Promise.resolve();
+    await Promise.resolve();
+    active.resolve({ ...result, strokeCount: 999 });
+    await old;
+    expect(h.studio.result.value?.strokeCount).toBe(1);
+    expect(h.studio.previewResult.value).toBeNull();
+    h.studio.beginInteraction();
+    h.studio.options.samples = 2;
+    await vi.advanceTimersByTimeAsync(24);
+    expect(h.runtime.render.mock.calls.at(-1)?.[1]).toBe("preview"); // new scene key must be prepared
+    h.dispose();
+  });
+  it("never lets a late preview overwrite a newer final or a replacement structure", async () => {
+    const h = harness();
+    await h.studio.loadFile(file());
+    h.studio.beginInteraction();
+    const preview = deferred<RenderResult>();
+    h.runtime.render.mockReturnValueOnce(preview.promise);
+    h.studio.options.rotation = [10, 20, 30];
+    await vi.advanceTimersByTimeAsync(24);
+    h.studio.endInteraction();
+    await Promise.resolve();
+    await Promise.resolve();
+    const exact = h.studio.result.value;
+    preview.resolve({ ...result, strokeCount: 999 });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.studio.result.value).toBe(exact);
+    expect(h.studio.previewResult.value).toBeNull();
+    h.studio.beginInteraction();
+    const old = deferred<RenderResult>();
+    h.runtime.render.mockReturnValueOnce(old.promise);
+    h.studio.options.rotation = [30, 40, 50];
+    await vi.advanceTimersByTimeAsync(24);
+    await h.studio.loadFile(file("replacement.pdb"));
+    old.resolve({ ...result, strokeCount: 1000 });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.studio.fileName.value).toBe("replacement.pdb");
+    expect(h.studio.result.value?.strokeCount).toBe(1);
+    expect(h.studio.interacting.value).toBe(false);
+    h.dispose();
+  });
+  it("hard cancellation and reset settle interactions without exporting previews", async () => {
+    const h = harness();
+    await h.studio.loadFile(file());
+    h.studio.beginInteraction();
+    h.studio.options.rotation = [40, 20, 0];
+    h.studio.cancel();
+    expect(h.runtime.cancel).toHaveBeenCalledOnce();
+    expect(h.studio.interacting.value).toBe(false);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.runtime.render).toHaveBeenCalledOnce();
+    h.studio.resetView();
+    await vi.advanceTimersByTimeAsync(180);
+    expect(h.runtime.render.mock.calls.at(-1)?.[1]).toBe("final");
+    expect(h.studio.options.rotation).toEqual([0, 0, 0]);
+    h.dispose();
+  });
+  it("records end-to-end timing only for the currently displayed result", async () => {
+    const h = harness();
+    await h.studio.loadFile(file());
+    const old = h.studio.result.value!;
+    h.studio.markDisplayed(old);
+    expect(old.timings?.visibleMs).toBeGreaterThanOrEqual(0);
+    h.studio.options.rotation = [5, 10, 15];
+    await vi.advanceTimersByTimeAsync(180);
+    const next = h.studio.result.value!;
+    h.studio.markDisplayed(old);
+    expect(next.timings?.visibleMs).toBeUndefined();
+    h.studio.markDisplayed(next);
+    expect(next.timings?.visibleMs).toBeGreaterThanOrEqual(next.timings!.responseMs!);
+    h.dispose();
+  });
   it("fetches only the self-hosted example and ignores late fetch completions", async () => {
     const h = harness();
     await h.studio.loadExample();
@@ -176,9 +318,10 @@ describe("useRibbon reactive runtime", () => {
   it("reports invalid files/recoverable worker failures without replacing valid previews", async () => {
     const h = harness();
     await h.studio.loadFile(file());
+    const previous = h.studio.result.value;
     await h.studio.loadFile(file("bad.txt"));
     expect(h.studio.error.value).toMatch(/Choose a/);
-    expect(h.studio.result.value).toEqual(result);
+    expect(h.studio.result.value).toBe(previous);
     h.runtime.parse.mockRejectedValueOnce(new Error("no complete residues"));
     await h.studio.loadFile(file());
     expect(h.studio.error.value).toBe("no complete residues");

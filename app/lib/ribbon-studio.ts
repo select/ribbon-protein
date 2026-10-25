@@ -1,6 +1,13 @@
-import { reactive, ref, shallowRef, computed, watch } from "vue";
+import { reactive, ref, shallowRef, computed, watch, triggerRef } from "vue";
 import { defaultRenderOptions, PAPER_PRESETS } from "../types/render";
-import type { RenderOptions, StructureData, RenderResult, RenderStatus } from "../types/render";
+import type {
+  PreviewScene,
+  RenderOptions,
+  StructureData,
+  RenderResult,
+  RenderStatus,
+} from "../types/render";
+import { previewGeometryKey, renderInteractionPreview } from "./interaction-preview";
 import { isAbort, publicAssetUrl } from "./worker-client";
 import type { RibbonRuntime } from "./worker-client";
 import { validateFile, LIMITS } from "./limits";
@@ -22,6 +29,12 @@ export function createRibbonStudio(runtime: RibbonRuntime, env: StudioEnvironmen
   const options = reactive<RenderOptions>(defaultRenderOptions());
   const structure = shallowRef<StructureData | null>(null);
   const result = shallowRef<RenderResult | null>(null);
+  const previewResult = shallowRef<RenderResult | null>(null);
+  const interacting = ref(false);
+  const displayResult = computed(() => previewResult.value ?? result.value);
+  let requestedAt = performance.now();
+  let scene: { source: StructureData; key: string; data: PreviewScene } | undefined;
+  const received = new WeakMap<RenderResult, { requested: number; received: number }>();
   const status = ref<RenderStatus>("idle");
   const error = ref<string | null>(null);
   const fileName = ref("");
@@ -33,7 +46,11 @@ export function createRibbonStudio(runtime: RibbonRuntime, env: StudioEnvironmen
   const revision = ref(0);
   const renderedRevision = ref(-1);
   const isStale = computed(
-    () => !result.value || revision.value !== renderedRevision.value || status.value !== "ready",
+    () =>
+      interacting.value ||
+      !result.value ||
+      revision.value !== renderedRevision.value ||
+      status.value !== "ready",
   );
   const stopTimer = () => {
     if (timer) clearTimeout(timer);
@@ -46,7 +63,7 @@ export function createRibbonStudio(runtime: RibbonRuntime, env: StudioEnvironmen
   const invalidate = () => {
     stopTimer();
     epoch++;
-    runtime.cancel();
+    runtime.invalidate();
     revision.value++;
   };
   const render = async (): Promise<void> => {
@@ -56,17 +73,34 @@ export function createRibbonStudio(runtime: RibbonRuntime, env: StudioEnvironmen
     if (!source) return;
     invalidate();
     const job = epoch,
-      requestedRevision = revision.value;
+      requestedRevision = revision.value,
+      quality = interacting.value ? "preview" : "final",
+      started = requestedAt;
     try {
       const snapshot = JSON.parse(JSON.stringify(options)) as RenderOptions;
       validateOptions(snapshot, source);
       error.value = null;
       status.value = "rendering";
-      const next = await runtime.render({ structure: source, options: snapshot });
+      const key = previewGeometryKey(snapshot);
+      const next =
+        quality === "preview" && scene?.source === source && scene.key === key
+          ? renderInteractionPreview(scene.data, snapshot)
+          : await runtime.render({ structure: source, options: snapshot }, quality);
       if (disposed || epoch !== job) return;
-      result.value = next;
-      renderedRevision.value = requestedRevision;
-      status.value = "ready";
+      if (next.previewScene) scene = { source, key, data: next.previewScene };
+      next.quality = quality;
+      next.timings = { ...next.timings, responseMs: performance.now() - started };
+      received.set(next, { requested: started, received: performance.now() });
+      if (quality === "preview") {
+        previewResult.value = next;
+        // A preview is display-only. It never updates renderedRevision/result.
+        status.value = "idle";
+      } else {
+        previewResult.value = null;
+        result.value = next;
+        renderedRevision.value = requestedRevision;
+        status.value = "ready";
+      }
     } catch (cause) {
       if (disposed || epoch !== job || isAbort(cause)) return;
       fail(cause);
@@ -107,21 +141,35 @@ export function createRibbonStudio(runtime: RibbonRuntime, env: StudioEnvironmen
     () => {
       if (quiet || disposed) return;
       revision.value++;
+      requestedAt = performance.now();
       error.value = null;
       if (status.value === "loading" || !structure.value) return;
       epoch++;
-      runtime.cancel();
-      stopTimer();
+      runtime.invalidate();
       status.value = "idle";
-      // Delay validation until the user finishes a numeric input, while stale is
-      // immediate so neither SVG nor asynchronous PNG can export old options.
-      timer = setTimeout(() => {
-        void render();
-      }, env.debounceMs ?? 180);
+      // Interaction is frame-coalesced, NOT trailing-debounced: a continuous
+      // pointer stream must not postpone every preview until the pointer stops.
+      // Discrete/numeric edits still debounce; export staleness is immediate.
+      if (interacting.value) {
+        if (!timer)
+          timer = setTimeout(() => {
+            void render();
+          }, 16);
+      } else {
+        stopTimer();
+        timer = setTimeout(() => {
+          void render();
+        }, env.debounceMs ?? 180);
+      }
     },
     { deep: true, flush: "sync" },
   );
   const beginLoad = () => {
+    if (status.value === "loading") runtime.cancel();
+    interacting.value = false;
+    previewResult.value = null;
+    scene = undefined;
+    requestedAt = performance.now();
     invalidate();
     fetchAbort?.abort();
     fetchAbort = undefined;
@@ -178,13 +226,41 @@ export function createRibbonStudio(runtime: RibbonRuntime, env: StudioEnvironmen
   };
   const cancel = (): void => {
     if (disposed) return;
+    interacting.value = false;
+    previewResult.value = null;
     invalidate();
+    runtime.cancel();
     fetchAbort?.abort();
     fetchAbort = undefined;
     error.value = null;
     status.value = "idle";
   };
+  const beginInteraction = (): void => {
+    if (disposed || !structure.value || status.value === "loading") return;
+    interacting.value = true;
+    requestedAt = performance.now();
+    invalidate();
+  };
+  const endInteraction = (): void => {
+    if (disposed || !interacting.value) return;
+    interacting.value = false;
+    requestedAt = performance.now();
+    invalidate();
+    void render();
+  };
+  const markDisplayed = (next: RenderResult): void => {
+    const timing = received.get(next);
+    if (disposed || displayResult.value !== next || !timing) return;
+    next.timings = {
+      ...next.timings,
+      imageDecodeMs: performance.now() - timing.received,
+      visibleMs: performance.now() - timing.requested,
+    };
+    triggerRef(result);
+    triggerRef(previewResult);
+  };
   const resetView = (): void => {
+    interacting.value = false;
     options.rotation = [0, 0, 0];
   };
   const current = (): RenderResult => {
@@ -217,11 +293,18 @@ export function createRibbonStudio(runtime: RibbonRuntime, env: StudioEnvironmen
     unwatchOptions();
     unwatchPreset();
     runtime.dispose();
+    scene = undefined;
   };
   return {
     options,
     structure,
     result,
+    previewResult,
+    displayResult,
+    interacting,
+    beginInteraction,
+    endInteraction,
+    markDisplayed,
     status,
     error,
     fileName,
