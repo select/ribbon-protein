@@ -126,7 +126,7 @@ fn caps_weld_both_outlines_and_paired_tracks_into_closed_contours() {
     }
 }
 #[test]
-fn rings_close_without_caps_and_branches_never_add_cross_arm_tracks() {
+fn rings_close_without_caps_and_branches_connect_tracks_inside_the_junction() {
     let ring = molecule(
         vec![
             [0.0, 0.0, 0.0],
@@ -167,11 +167,173 @@ fn rings_close_without_caps_and_branches_never_add_cross_arm_tracks() {
         p.iter()
             .filter(|p| matches!(p.profile, Profile::Wire))
             .count(),
-        6,
-        "three true termini only, two nested caps each"
+        12,
+        "six terminal caps, three paired junction tracks and three middle spokes"
     );
     assert_finite(&p);
 }
+#[test]
+fn every_branch_interior_track_has_a_connected_junction_endpoint() {
+    for arms in [
+        vec![[3.0, 0.0, 0.0], [-2.0, 2.0, 0.0], [-2.0, -2.0, 0.0]],
+        vec![[3.0, 0.0, 0.0], [-3.0, 0.0, 0.0], [0.0, 3.0, 0.0]],
+        vec![[3.0, 0.0, 0.0], [3.0, 1.0, 0.0], [3.0, -1.0, 0.0]],
+        vec![
+            [3.0, 0.0, 0.0],
+            [0.0, 3.0, 0.0],
+            [-3.0, 0.0, 0.0],
+            [0.0, -3.0, 0.0],
+        ],
+    ] {
+        let count = arms.len();
+        let mut atoms = vec![[0.0; 3]];
+        atoms.extend(arms);
+        let m = molecule(atoms, (1..=count).map(|i| [0, i]).collect());
+        for lines in [0, 1, 2, 3, 4, 20] {
+            let paths = project(&m, 0.4, lines);
+            let local: Vec<_> = paths
+                .iter()
+                .filter(|p| {
+                    matches!(p.profile, Profile::Wire)
+                        && [2, ARC_STEPS / 2 + 1].contains(&p.sections.len())
+                        && p.sections.iter().all(|s| norm(s.left) <= 0.4 + EPS)
+                })
+                .collect();
+            assert_eq!(local.len(), count * (lines / 2 + lines % 2));
+            for arm in bands(&paths) {
+                for q in profile(&arm[0], lines).into_iter().skip(1).take(lines) {
+                    assert!(
+                        local.iter().any(|p| {
+                            [
+                                p.sections.first().unwrap().left,
+                                p.sections.last().unwrap().left,
+                            ]
+                            .into_iter()
+                            .any(|end| norm(sub(end, q)) < EPS)
+                        }),
+                        "an interior track must not stop at an unfilled branch seam"
+                    );
+                }
+            }
+            assert_finite(&paths);
+            // Every added point stays in the bounded patch, never spanning bonds.
+            assert!(local
+                .iter()
+                .flat_map(|p| &p.sections)
+                .all(|s| norm(s.left) <= 0.4 + EPS));
+        }
+    }
+}
+
+#[test]
+fn junction_surface_covers_the_center_and_tracks_obey_foreground_clipping() {
+    let m = molecule(
+        vec![
+            [0.0; 3],
+            [3.0, 0.0, 0.0],
+            [-2.0, 2.0, 0.0],
+            [-2.0, -2.0, 0.0],
+        ],
+        vec![[0, 1], [0, 2], [0, 3]],
+    );
+    let paths = project(&m, 0.4, 3);
+    let mut panels = Vec::new();
+    let profiles: Vec<_> = paths.iter().map(|p| Some(p.profile)).collect();
+    for (segment, path) in paths.iter().enumerate() {
+        for (step, pair) in path.sections.windows(2).enumerate() {
+            panels.push(crate::clip::Panel {
+                start: pair[0].clone(),
+                end: pair[1].clone(),
+                segment,
+                step,
+            });
+        }
+    }
+    let mut intervals: Vec<_> = panels
+        .iter()
+        .filter(|p| matches!(profiles[p.segment], Some(Profile::Surface)))
+        .flat_map(|p| crate::clip::occlusion_intervals([[-0.01, 0.0], [0.01, 0.0]], &p.corners()))
+        .collect();
+    assert!(
+        crate::clip::subtract_intervals([[-0.01, 0.0], [0.01, 0.0]], &mut intervals).is_empty()
+    );
+    let local: Vec<_> = paths
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| {
+            matches!(p.profile, Profile::Wire)
+                && p.sections.iter().all(|s| norm(s.left) <= 0.4 + EPS)
+        })
+        .map(|(i, _)| i)
+        .collect();
+    let visible = crate::clip::visible_edges(
+        &mut panels.clone(),
+        paths.len(),
+        2,
+        &crate::RenderOptions::default(),
+        &profiles,
+    )
+    .unwrap();
+    for &i in &local {
+        let expected: f64 = paths[i]
+            .sections
+            .windows(2)
+            .map(|s| norm(sub(s[0].left, s[1].left)))
+            .sum();
+        let actual: f64 = visible[i].iter().map(|e| norm(sub(e[0], e[1]))).sum();
+        assert!(
+            (actual - expected).abs() < EPS,
+            "junction must not clip its own ink"
+        );
+    }
+    let mut profiles = profiles;
+    profiles.push(None);
+    panels.push(crate::clip::Panel {
+        start: Section {
+            left: [-0.5, -0.5],
+            right: [-0.5, 0.5],
+            z: 10.0,
+            alpha: 0.0,
+        },
+        end: Section {
+            left: [0.5, -0.5],
+            right: [0.5, 0.5],
+            z: 10.0,
+            alpha: 0.0,
+        },
+        segment: paths.len(),
+        step: 0,
+    });
+    let visible = crate::clip::visible_edges(
+        &mut panels,
+        paths.len() + 1,
+        2,
+        &crate::RenderOptions::default(),
+        &profiles,
+    )
+    .unwrap();
+    assert!(local.iter().all(|&i| visible[i].is_empty()));
+}
+
+#[test]
+fn junction_work_is_bounded_before_allocating_interior_tracks() {
+    let m = molecule(
+        vec![
+            [0.0; 3],
+            [3.0, 0.0, 0.0],
+            [-2.0, 2.0, 0.0],
+            [-2.0, -2.0, 0.0],
+        ],
+        vec![[0, 1], [0, 2], [0, 3]],
+    );
+    let mut budget = Budget(MAX_EDGES - 200);
+    assert!(super::project(&m, &camera(), 0.4, 20, &mut budget)
+        .unwrap_err()
+        .to_string()
+        .contains("Molecular geometry"));
+    assert_eq!(budget.0, MAX_EDGES - 200);
+}
+
 #[test]
 fn zero_width_is_original_wires_and_orphans_keep_fixed_circles() {
     let m = molecule(

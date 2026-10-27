@@ -150,6 +150,60 @@ fn cap(
     Ok(())
 }
 
+/// Close the central patch between the arm seams. Pair neighboring half-tracks
+/// inside the junction, with an odd middle track meeting at the shared atom.
+/// These are plotting paths, not filled SVG shapes or extra chemical bonds.
+fn junction(
+    p: V3,
+    sides: &[Section],
+    controls: &[P2],
+    lines: usize,
+    paths: &mut Vec<ProjectedPath>,
+    budget: &mut Budget,
+) -> Result<(), RenderError> {
+    if sides.len() < 3 {
+        return Ok(());
+    }
+    let steps = ARC_STEPS / 2;
+    budget.check(
+        sides
+            .len()
+            .saturating_mul(1 + lines / 2 * steps + lines % 2),
+    )?;
+    // Fan triangles cover the otherwise empty junction for hidden-line removal.
+    // Emit all surfaces before their ink so equal-depth tie breaking preserves it.
+    for side in sides {
+        budget.push(paths, vec![wire(p), side.clone()], Profile::Surface)?;
+    }
+    let origin = [p[0], p[1]];
+    for (i, side) in sides.iter().enumerate() {
+        let next = &sides[(i + 1) % sides.len()];
+        for track in 1..=lines / 2 {
+            let t = track as f64 / (lines + 1) as f64;
+            let a = lerp(side.left, side.right, 1.0 - t);
+            let b = lerp(next.left, next.right, t);
+            let control = lerp(controls[i], origin, 2.0 * t);
+            let curve = (0..=steps)
+                .map(|k| {
+                    let u = k as f64 / steps as f64;
+                    let q = lerp(lerp(a, control, u), lerp(control, b, u), u);
+                    wire([q[0], q[1], p[2]])
+                })
+                .collect();
+            budget.push(paths, curve, Profile::Wire)?;
+        }
+        if lines % 2 == 1 {
+            let q = lerp(side.left, side.right, 0.5);
+            budget.push(
+                paths,
+                vec![wire(p), wire([q[0], q[1], p[2]])],
+                Profile::Wire,
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// Circular centerline fillets keep all offset tracks parallel. At a projected
 /// hairpin too tight for the requested width, locally narrow the band rather
 /// than generate inverted offsets, unbounded miters or invented directions.
@@ -235,9 +289,9 @@ pub(crate) fn project(
         return Ok(paths);
     }
     let radius = width * 0.5;
-    // Branch outline joins use angular neighbors, not a guessed chemical
-    // continuation. Bounded bevel points live within two radii of the atom;
-    // no centerline or interior-track chord is added between separate arms.
+    // Branch outlines and interior tracks use angular neighbors, not a guessed
+    // chemical continuation. The connecting patch stays within two radii of
+    // the shared atom, rather than leaving disconnected arm seams.
     let mut joins: Vec<Vec<(usize, Section)>> = vec![Vec::new(); points.len()];
     for (node, neighbors) in adjacent.iter().enumerate().filter(|(_, n)| n.len() > 2) {
         let p = points[node];
@@ -257,6 +311,7 @@ pub(crate) fn project(
         });
         budget.check(rays.len().saturating_mul(2 * ARC_STEPS))?;
         let mut sides: Vec<_> = rays.iter().map(|&(_, d)| band(p, d, radius)).collect();
+        let mut controls = Vec::with_capacity(rays.len());
         for i in 0..rays.len() {
             let j = (i + 1) % rays.len();
             let (u, v) = (rays[i].1, rays[j].1);
@@ -267,8 +322,10 @@ pub(crate) fn project(
                 let join = add(origin, mul(bisector, distance));
                 sides[i].right = join;
                 sides[j].left = join;
+                controls.push(join);
             } else {
                 let angle = gap - PI;
+                controls.push(add(origin, mul(rotate(normal(u), angle * 0.5), radius)));
                 let steps = ((angle / PI * ARC_STEPS as f64).ceil() as usize).max(2);
                 let arc: Vec<_> = (0..=steps)
                     .map(|k| {
@@ -292,6 +349,7 @@ pub(crate) fn project(
                 budget.push(&mut paths, arc, Profile::Wire)?;
             }
         }
+        junction(p, &sides, &controls, lines, &mut paths, budget)?;
         joins[node] = rays.iter().zip(sides).map(|(&(n, _), s)| (n, s)).collect();
     }
     let mut used = vec![false; molecule.bonds.len()];
