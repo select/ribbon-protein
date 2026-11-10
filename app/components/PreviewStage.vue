@@ -194,7 +194,8 @@ const noChains = computed(() => hasStructure.value && studio.options.selectedCha
 
 const previewLabel = computed(() => {
   const name = studio.fileName || studio.structure?.name || "structure";
-  return `Ribbon preview of ${name}, rotation ${rotationText.value}. Drag or use arrow keys to rotate.`;
+  const kind = studio.options.renderMode === "slice" ? "Slice" : "Ribbon";
+  return `${kind} preview of ${name}, rotation ${rotationText.value}. Drag or use arrow keys to rotate.`;
 });
 
 onBeforeUnmount(() => {

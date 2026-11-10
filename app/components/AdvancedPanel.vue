@@ -5,26 +5,51 @@ import type { Studio } from "../app.vue";
 import RangeField from "./RangeField.vue";
 import SegmentedControl from "./SegmentedControl.vue";
 import StudioSection from "./StudioSection.vue";
+import ToggleSwitch from "./ToggleSwitch.vue";
 
 const studio = inject<Studio>("ribbon")!;
-const directionOptions: {
-  value: RenderOptions["strokeDirection"];
-  label: string;
-  title: string;
-}[] = [
-  { value: "backbone", label: "Backbone", title: "Smooth forward joins, paths never reversed" },
-  { value: "travel", label: "Travel", title: "Minimise pen-up travel, paths may be reversed" },
-];
-const directionHint = computed(() =>
-  studio.options.strokeDirection === "backbone"
-    ? "Paths follow the chain direction with smooth forward joins."
-    : "Paths may be reversed to minimise pen-up travel.",
+const isSlice = computed(() => studio.options.renderMode === "slice");
+const directionOptions = computed(
+  (): { value: RenderOptions["strokeDirection"]; label: string; title: string }[] => [
+    {
+      value: "backbone",
+      label: isSlice.value ? "Contour" : "Backbone",
+      title: isSlice.value
+        ? "Preserve slice and contour winding order"
+        : "Smooth forward joins, paths never reversed",
+    },
+    { value: "travel", label: "Travel", title: "Minimise pen-up travel, paths may be reversed" },
+  ],
 );
+const directionHint = computed(() => {
+  if (studio.options.strokeDirection === "travel") {
+    return "Paths may be reversed and reordered to minimise pen-up travel.";
+  }
+  return isSlice.value
+    ? "Slices plot from back to front, keeping multi-pass overdraws grouped per track."
+    : "Paths follow the chain direction with smooth forward joins.";
+});
 </script>
 
 <template>
   <StudioSection title="Advanced" collapsible :default-open="false">
+    <template v-if="isSlice">
+      <RangeField
+        v-model="studio.options.sliceInkOpacity"
+        label="Preview ink opacity"
+        :min="0.1"
+        :max="1"
+        :step="0.05"
+        hint="Simulates physical ink buildup in the SVG preview where strokes overlap or retrace."
+      />
+      <ToggleSwitch
+        v-model="studio.options.slicePerspective"
+        label="Perspective"
+        hint="Foreshorten deeper contour slices from the camera."
+      />
+    </template>
     <RangeField
+      v-else
       v-model="studio.options.samples"
       label="Samples per residue"
       :min="2"

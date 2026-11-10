@@ -1,27 +1,55 @@
 <script setup lang="ts">
-import { computed, inject } from "vue";
+import { computed, inject, ref, watch } from "vue";
 import type { Studio, StudioUi } from "../app.vue";
 import AppIcon from "./AppIcon.vue";
 import StudioSection from "./StudioSection.vue";
-import { moleculeGroups, selectMoleculeGroup, colorMoleculeGroup } from "../lib/molecule-groups";
+import {
+  colorMoleculeGroup,
+  componentGroups,
+  groupSwatchColor,
+  selectMoleculeGroup,
+} from "../lib/molecule-groups";
 
 const studio = inject<Studio>("ribbon")!;
 const ui = inject<StudioUi>("ribbon-ui")!;
 
 const DEFAULT_INK = "#191918";
-const PEN_SWATCHES = ["#191918", "#c4302b", "#1f5fbf", "#2f7d4a"];
 
 const busy = computed(() => studio.status === "loading");
+const isSlice = computed(() => studio.options.renderMode === "slice");
 const chains = computed(() => studio.structure?.chains ?? []);
+const chainById = computed(() => new Map(chains.value.map((c) => [c.id, c])));
 const selected = computed(() => new Set(studio.options.selectedChains));
 const molecules = computed(() => new Map(studio.structure?.molecules?.map((m) => [m.chainId, m])));
-const groups = computed(() => moleculeGroups(studio.structure?.molecules ?? []));
+const groups = computed(() => (studio.structure ? componentGroups(studio.structure) : []));
+
+const expanded = ref<Record<string, boolean>>({});
+watch(
+  () => studio.structure,
+  () => {
+    expanded.value = {};
+  },
+);
+
+function isExpanded(key: string, defaultExpanded: boolean): boolean {
+  return expanded.value[key] ?? defaultExpanded;
+}
+
+function toggleExpanded(key: string, defaultExpanded: boolean) {
+  expanded.value = {
+    ...expanded.value,
+    [key]: !isExpanded(key, defaultExpanded),
+  };
+}
+
 function toggleGroup(ids: string[], on: boolean) {
   if (studio.structure) selectMoleculeGroup(studio.options, studio.structure, ids, on);
 }
+
 function groupCount(ids: string[]) {
   return ids.filter((id) => selected.value.has(id)).length;
 }
+
 const selectedCount = computed(
   () => chains.value.filter((chain) => selected.value.has(chain.id)).length,
 );
@@ -51,26 +79,27 @@ function colorOf(id: string): string {
   return studio.options.chainColors[id] ?? DEFAULT_INK;
 }
 
+function parentColorOf(ids: string[]): string {
+  return groupSwatchColor(studio.options.chainColors, ids, DEFAULT_INK);
+}
+
 function setColor(id: string, color: string) {
   studio.options.chainColors = { ...studio.options.chainColors, [id]: color.toLowerCase() };
 }
 
-function clearColor(id: string) {
-  const next = { ...studio.options.chainColors };
-  delete next[id];
-  studio.options.chainColors = next;
-}
-
-function cycleSwatch(id: string) {
-  const current = colorOf(id).toLowerCase();
-  const index = PEN_SWATCHES.indexOf(current);
-  const color = PEN_SWATCHES[(index + 1) % PEN_SWATCHES.length] ?? DEFAULT_INK;
-  if (color === DEFAULT_INK) clearColor(id);
-  else setColor(id, color);
+function setGroupColor(ids: string[], color: string) {
+  colorMoleculeGroup(studio.options, ids, color);
 }
 
 function chainLabel(id: string): string {
   return molecules.value.get(id)?.label ?? (id.trim() === "" ? "(blank)" : id);
+}
+
+function countLabel(id: string): string {
+  const mol = molecules.value.get(id);
+  if (mol) return `${mol.atoms.length} ${mol.atoms.length === 1 ? "atom" : "atoms"}`;
+  const count = chainById.value.get(id)?.residueCount ?? 0;
+  return `${count.toLocaleString()} res`;
 }
 </script>
 
@@ -143,17 +172,34 @@ function chainLabel(id: string): string {
           </div>
         </div>
 
-        <div v-if="groups.length" class="molecule-categories">
-          <div
+        <ul class="component-tree" role="tree" aria-labelledby="chains-label">
+          <li
             v-for="group in groups"
-            :key="group.category"
-            class="molecule-category"
-            :data-category="group.category"
+            :key="group.key"
+            class="tree-group"
+            role="treeitem"
+            :aria-expanded="isExpanded(group.key, group.defaultExpanded)"
+            :data-category="group.key"
           >
-            <div class="molecule-group">
-              <label>
+            <div class="tree-row tree-parent" :class="{ 'is-off': groupCount(group.ids) === 0 }">
+              <button
+                type="button"
+                class="tree-toggle"
+                :aria-expanded="isExpanded(group.key, group.defaultExpanded)"
+                :aria-label="`${isExpanded(group.key, group.defaultExpanded) ? 'Collapse' : 'Expand'} ${group.label}`"
+                @click="toggleExpanded(group.key, group.defaultExpanded)"
+              >
+                <AppIcon
+                  name="chevron"
+                  :size="12"
+                  class="tree-chevron"
+                  :class="{ 'is-open': isExpanded(group.key, group.defaultExpanded) }"
+                />
+              </button>
+              <label class="row-check">
                 <input
                   type="checkbox"
+                  class="check"
                   :checked="groupCount(group.ids) === group.ids.length"
                   :indeterminate="
                     groupCount(group.ids) > 0 && groupCount(group.ids) < group.ids.length
@@ -161,74 +207,72 @@ function chainLabel(id: string): string {
                   :aria-label="`Show all ${group.label.toLowerCase()}`"
                   @change="toggleGroup(group.ids, ($event.target as HTMLInputElement).checked)"
                 />
-                {{ group.label }}
-                <span class="count rs-num">{{ groupCount(group.ids) }}/{{ group.ids.length }}</span>
-              </label>
-              <input
-                type="color"
-                :value="colorOf(group.ids[0]!)"
-                :aria-label="`Color all ${group.label.toLowerCase()}`"
-                :title="`Apply color to all ${group.label.toLowerCase()}, including hidden components`"
-                @input="
-                  colorMoleculeGroup(
-                    studio.options,
-                    group.ids,
-                    ($event.target as HTMLInputElement).value,
-                  )
-                "
-              />
-            </div>
-          </div>
-        </div>
-        <ul class="chain-list" aria-labelledby="chains-label">
-          <li
-            v-for="chain in chains"
-            :key="chain.id"
-            class="chain"
-            :class="{ 'is-off': !selected.has(chain.id) }"
-          >
-            <label class="chain-check">
-              <input
-                type="checkbox"
-                class="check"
-                :checked="selected.has(chain.id)"
-                @change="toggleChain(chain.id, ($event.target as HTMLInputElement).checked)"
-              />
-              <span class="chain-id rs-num" :title="chainLabel(chain.id)">{{
-                chainLabel(chain.id)
-              }}</span>
-              <span class="chain-count">{{
-                molecules.get(chain.id)
-                  ? `${molecules.get(chain.id)!.atoms.length} atoms`
-                  : `${chain.residueCount.toLocaleString()} res`
-              }}</span>
-            </label>
-            <div class="chain-color">
-              <button
-                type="button"
-                class="swatch-cycle"
-                :style="{ '--swatch': colorOf(chain.id) }"
-                :title="`Cycle pen color for chain ${chainLabel(chain.id)}`"
-                :aria-label="`Cycle preset pen color for chain ${chainLabel(chain.id)}`"
-                @click="cycleSwatch(chain.id)"
-              />
-              <label class="picker" :title="`Custom pen color for chain ${chainLabel(chain.id)}`">
-                <span class="rs-visually-hidden"
-                  >Custom pen color for chain {{ chainLabel(chain.id) }}</span
+                <span class="group-title">{{ group.label }}</span>
+                <span class="row-count rs-num"
+                  >{{ groupCount(group.ids) }}/{{ group.ids.length }}</span
                 >
+              </label>
+              <label
+                v-if="!isSlice"
+                class="color-dot"
+                :style="{ '--swatch': parentColorOf(group.ids) }"
+                :title="`Choose pen color for all ${group.label.toLowerCase()}`"
+              >
+                <span class="rs-visually-hidden">Color all {{ group.label.toLowerCase() }}</span>
                 <input
                   type="color"
-                  :value="colorOf(chain.id)"
-                  @input="setColor(chain.id, ($event.target as HTMLInputElement).value)"
+                  :value="parentColorOf(group.ids)"
+                  @input="setGroupColor(group.ids, ($event.target as HTMLInputElement).value)"
                 />
-                <AppIcon name="pen" :size="12" />
               </label>
             </div>
+
+            <ul
+              v-show="isExpanded(group.key, group.defaultExpanded)"
+              class="tree-children"
+              role="group"
+            >
+              <li
+                v-for="id in group.ids"
+                :key="id"
+                class="tree-row tree-child"
+                role="treeitem"
+                :class="{ 'is-off': !selected.has(id) }"
+              >
+                <label class="row-check">
+                  <input
+                    type="checkbox"
+                    class="check"
+                    :checked="selected.has(id)"
+                    @change="toggleChain(id, ($event.target as HTMLInputElement).checked)"
+                  />
+                  <span class="chain-id rs-num" :title="chainLabel(id)">{{ chainLabel(id) }}</span>
+                  <span class="row-count rs-num">{{ countLabel(id) }}</span>
+                </label>
+                <label
+                  v-if="!isSlice"
+                  class="color-dot"
+                  :style="{ '--swatch': colorOf(id) }"
+                  :title="`Choose pen color for ${chainLabel(id)}`"
+                >
+                  <span class="rs-visually-hidden">Pen color for {{ chainLabel(id) }}</span>
+                  <input
+                    type="color"
+                    :value="colorOf(id)"
+                    @input="setColor(id, ($event.target as HTMLInputElement).value)"
+                  />
+                </label>
+              </li>
+            </ul>
           </li>
         </ul>
 
         <p v-if="selectedCount === 0" class="rs-hint warn" role="status">
           No components selected — select at least one component to draw.
+        </p>
+        <p v-else-if="isSlice" class="rs-hint">
+          Selected components form a unified heavy-atom surface envelope plotted in black. Water is
+          hidden initially; hydrogens are omitted.
         </p>
         <p v-else class="rs-hint">
           {{ selectedResidues.toLocaleString() }} protein residues selected (local DSSP).
@@ -243,32 +287,6 @@ function chainLabel(id: string): string {
 </template>
 
 <style scoped>
-.molecule-categories {
-  display: grid;
-  gap: 6px;
-  font-size: 12px;
-}
-.molecule-group {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.molecule-group label {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
-}
-.molecule-group input[type="color"] {
-  width: 28px;
-  height: 24px;
-  padding: 1px;
-  border: 1px solid var(--rs-line);
-  border-radius: 4px;
-  cursor: pointer;
-}
-
 .intake {
   display: flex;
   flex-wrap: wrap;
@@ -338,10 +356,10 @@ function chainLabel(id: string): string {
   gap: 2px;
 }
 
-.chain-list {
-  max-height: 232px;
+.component-tree {
+  max-height: 264px;
   margin: 0;
-  padding: 2px;
+  padding: 3px;
   overflow-y: auto;
   list-style: none;
   border: 1px solid var(--rs-line);
@@ -349,30 +367,74 @@ function chainLabel(id: string): string {
   background: var(--rs-surface);
 }
 
-.chain {
+.tree-group + .tree-group {
+  margin-top: 2px;
+}
+
+.tree-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 4px 0 0;
+  gap: 4px;
+  padding: 0 4px 0 2px;
   border-radius: var(--rs-radius-sm);
 }
 
-.chain:hover {
+.tree-row:hover {
   background: var(--rs-hover);
 }
 
-.chain-check {
+.tree-toggle {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 20px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--rs-radius-sm);
+  background: transparent;
+  color: var(--rs-muted);
+  cursor: pointer;
+}
+
+.tree-toggle:hover {
+  background: var(--rs-hover);
+  color: var(--rs-ink-strong);
+}
+
+.tree-chevron {
+  transform: rotate(-90deg);
+  transition: transform 140ms var(--rs-ease);
+}
+
+.tree-chevron.is-open {
+  transform: none;
+}
+
+.tree-children {
+  margin: 0 0 2px 11px;
+  padding: 0 0 0 9px;
+  list-style: none;
+  border-left: 1px solid var(--rs-line);
+}
+
+.tree-child {
+  padding-left: 4px;
+}
+
+.row-check {
   display: flex;
   flex: 1 1 auto;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   min-width: 0;
-  min-height: 28px;
-  padding: 0 6px;
+  min-height: 27px;
+  padding: 0 2px;
   cursor: pointer;
 }
 
 .check {
+  flex: none;
   width: 14px;
   height: 14px;
   margin: 0;
@@ -380,77 +442,68 @@ function chainLabel(id: string): string {
   cursor: pointer;
 }
 
+.group-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--rs-ink-strong);
+}
+
 .chain-id {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 12.5px;
   font-weight: 500;
   color: var(--rs-ink-strong);
 }
 
-.chain-count {
+.row-count {
   margin-left: auto;
-  font-size: 12px;
+  padding-left: 6px;
+  font-size: 11.5px;
   color: var(--rs-muted);
   white-space: nowrap;
 }
 
+.is-off .group-title,
 .is-off .chain-id,
-.is-off .chain-count {
+.is-off .row-count {
   color: var(--rs-faint);
 }
 
-.chain-color {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.swatch-cycle {
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--rs-radius-sm);
-  background: transparent;
+.color-dot {
   position: relative;
-}
-
-.swatch-cycle::after {
-  position: absolute;
-  inset: 6px;
-  border-radius: 50%;
-  background: var(--swatch);
-  box-shadow: 0 0 0 1px rgba(15, 15, 15, 0.12);
-  content: "";
-}
-
-.swatch-cycle:hover {
-  background: var(--rs-hover);
-}
-
-.is-off .swatch-cycle::after {
-  opacity: 0.35;
-}
-
-.picker {
-  position: relative;
-  display: inline-grid;
-  place-items: center;
+  display: inline-block;
+  flex: none;
   width: 22px;
   height: 22px;
   border-radius: var(--rs-radius-sm);
-  color: var(--rs-faint);
   cursor: pointer;
 }
 
-.picker:hover {
-  background: var(--rs-hover);
-  color: var(--rs-ink);
+.color-dot::after {
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  background: var(--swatch);
+  box-shadow: 0 0 0 1px rgba(15, 15, 15, 0.16);
+  content: "";
 }
 
-.picker input {
+.color-dot:hover {
+  background: var(--rs-hover);
+}
+
+.is-off .color-dot::after {
+  opacity: 0.35;
+}
+
+.color-dot input {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -461,7 +514,7 @@ function chainLabel(id: string): string {
   cursor: pointer;
 }
 
-.picker:has(input:focus-visible) {
+.color-dot:has(input:focus-visible) {
   outline: 2px solid var(--rs-focus);
   outline-offset: 1px;
 }

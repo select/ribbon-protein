@@ -51,7 +51,8 @@ This selects the GitHub Pages preset and `/ribbon-protein/` base path, including
 ## Using the studio
 
 1. Choose or drop a `.cif`, `.mmcif`, `.pdb` or `.ent` file. **Load example** opens a small public crambin (1CRN) backbone bundled with the app, without contacting a molecular database.
-2. Select protein chains and non-protein components, with optional per-component pen colors. Group controls toggle and recolor all lipids, other molecules, DNA/RNA/other polymers, single atoms or water at once, including currently hidden members. Lipids start in red with an independent **Lipid stroke** width (initially 0.4 mm, matching **Default pen width**; independently adjustable afterward); water is hidden initially.
+2. Select protein chains and non-protein components in the collapsible **Components** tree, grouped by type (`Protein chains`, `Lipids`, `Other molecules`, `DNA/RNA / other polymers`, `Single atoms`, `Water`). Click any parent or component color circle to pick its pen color; water starts collapsed and hidden.
+   - Under **Mode**, switch between **Ribbon** (secondary-structure ribbons and covalent bond bands) and **Slicer** (topographic heavy-atom surface contours for single-pen plotting).
 3. Choose paper, orientation and margin:
    - **A4:** 210 × 297 mm.
    - **A3:** 297 × 420 mm.
@@ -62,6 +63,16 @@ This selects the GitHub Pages preset and `/ribbon-protein/` base path, including
 6. Download **SVG** for plotting/editing or **PNG** for a white-paper preview. Only the current, exact full-quality result can be exported—not a stale result or interaction preview. **Cancel** interrupts the worker; the next render restores the normalized structure without parsing or assigning DSSP again.
 
 Guides belong to the preview and are **never exported**. The coaster export is a square SVG canvas, not a mask or a cutting template. The default 5 mm margin keeps the artwork inside the rounded guide; reducing the margin can put ink outside the physical coaster near its corners.
+
+### Slicer mode (pen-plotter surface contours)
+
+In **Slicer** mode, selected protein heavy atoms and non-protein molecules are combined into a 3D Gaussian surface envelope, smoothed by **Coarseness** and **Envelope probe**, and sectioned by marching squares along **X**, **Y**, **Z** or the live **View** axis.
+
+Because physical pen plotters cannot fade strokes by opacity, 3D depth is generated entirely through geometry:
+
+- **Overdraw passes** (`1–8`): nearer contour segments are retraced multiple times so wet physical ink builds density.
+- **Parallel lines** (`1–7`) and **Parallel spacing**: foreground contours gain flanking inward/outward parallel tracks with smooth cosine tapers.
+- **Simulated ink buildup (`stroke-opacity`)**: exclusively in **Slicer** mode, the SVG group uses `stroke="black"` with `stroke-opacity` (configurable via **Preview ink opacity**, default `0.35`) so stacked multi-pass strokes and crossing contour sheets appear darker in the preview and PNG export while exporting exact plotter paths.
 
 ### Plotter semantics
 

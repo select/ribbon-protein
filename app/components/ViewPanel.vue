@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, inject } from "vue";
-import type { Vec3 } from "~/types/render";
+import type { SliceAxis, Vec3 } from "~/types/render";
 import type { Studio } from "../app.vue";
 import AppIcon from "./AppIcon.vue";
 import RangeField from "./RangeField.vue";
+import SegmentedControl from "./SegmentedControl.vue";
 import StudioSection from "./StudioSection.vue";
 
 const studio = inject<Studio>("ribbon")!;
@@ -26,6 +27,13 @@ const axes = [
 ];
 
 const isDefault = computed(() => studio.options.rotation.every((value) => value === 0));
+const isSlice = computed(() => studio.options.renderMode === "slice");
+const sliceAxes: { value: SliceAxis; label: string; title: string }[] = [
+  { value: "x", label: "X", title: "Slice perpendicular to structure X axis" },
+  { value: "y", label: "Y", title: "Slice perpendicular to structure Y axis" },
+  { value: "z", label: "Z", title: "Slice perpendicular to structure Z axis" },
+  { value: "view", label: "View", title: "Slice front-to-back along the camera direction" },
+];
 </script>
 
 <template>
@@ -42,6 +50,13 @@ const isDefault = computed(() => studio.options.rotation.every((value) => value 
         Reset
       </button>
     </template>
+
+    <SegmentedControl
+      v-if="isSlice"
+      v-model="studio.options.sliceAxis"
+      legend="Section axis"
+      :options="sliceAxes"
+    />
 
     <RangeField
       v-for="item in axes"

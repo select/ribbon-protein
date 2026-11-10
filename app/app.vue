@@ -21,6 +21,7 @@ import AdvancedPanel from "~/components/AdvancedPanel.vue";
 import AppIcon from "~/components/AppIcon.vue";
 import ErrorBanner from "~/components/ErrorBanner.vue";
 import InkPanel from "~/components/InkPanel.vue";
+import ModePanel from "~/components/ModePanel.vue";
 import PaperPanel from "~/components/PaperPanel.vue";
 import PreviewStage from "~/components/PreviewStage.vue";
 import StatsBar from "~/components/StatsBar.vue";
@@ -198,6 +199,7 @@ onBeforeUnmount(() => {
 
       <div class="sidebar-scroll">
         <StructurePanel />
+        <ModePanel />
         <PaperPanel />
         <ViewPanel />
         <InkPanel />

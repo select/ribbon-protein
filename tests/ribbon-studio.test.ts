@@ -355,4 +355,21 @@ describe("useRibbon reactive runtime", () => {
     expect(h.studio.status.value).toBe("ready");
     h.dispose();
   });
+  it("switches reactively between ribbon and slicer modes and forwards slicer depth options", async () => {
+    const h = harness();
+    await h.studio.loadFile(file());
+    expect(h.studio.options.renderMode).toBe("ribbon");
+    h.studio.options.renderMode = "slice";
+    h.studio.options.sliceMaxPasses = 6;
+    h.studio.options.sliceMaxParallel = 4;
+    h.studio.options.sliceInkOpacity = 0.4;
+    expect(h.studio.isStale.value).toBe(true);
+    await vi.advanceTimersByTimeAsync(180);
+    const sent = h.runtime.render.mock.calls.at(-1)![0].options;
+    expect(sent.renderMode).toBe("slice");
+    expect(sent.sliceMaxPasses).toBe(6);
+    expect(sent.sliceMaxParallel).toBe(4);
+    expect(sent.sliceInkOpacity).toBe(0.4);
+    h.dispose();
+  });
 });

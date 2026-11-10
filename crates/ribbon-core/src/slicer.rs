@@ -1051,7 +1051,7 @@ pub(crate) fn render_from_prepared(
             let pair = track.div_ceil(2);
             let inward = track % 2 == 1;
             let dist = pair as f64 * o.slice_parallel_spacing_mm;
-            if inward && dist >= 0.80 * inradius {
+            if inward && (n <= 5 || dist >= 0.50 * inradius) {
                 continue;
             }
             let signed_offset = if inward { -dist } else { dist };
