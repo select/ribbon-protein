@@ -27,6 +27,7 @@ fn request() -> RenderRequest {
         structure: StructureData {
             name: "synthetic & test <ribbon>".into(),
             molecules: vec![],
+            chain_atoms: vec![],
             segments: vec![
                 segment("auth-A", 0.0, 24),
                 segment("long_chain_B", 12.0, 24),

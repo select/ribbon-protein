@@ -10,6 +10,7 @@ fn request() -> RenderRequest {
             category: category.into(),
             atoms: vec![[0.0, i as f64 * 4.0, 0.0], [2.0, i as f64 * 4.0, 0.0]],
             bonds: vec![[0, 1]],
+            radii: vec![],
         })
         .collect();
     RenderRequest {
@@ -26,6 +27,7 @@ fn request() -> RenderRequest {
                 })
                 .collect(),
             molecules,
+            chain_atoms: vec![],
         },
         options: RenderOptions {
             selected_chains: vec!["lipid".into(), "molecule".into()],

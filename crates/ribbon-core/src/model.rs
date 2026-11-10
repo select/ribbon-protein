@@ -43,6 +43,17 @@ pub struct Molecule {
     pub category: String,
     pub atoms: Vec<Vec3>,
     pub bonds: Vec<[usize; 2]>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub radii: Vec<f64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChainAtoms {
+    pub chain_id: String,
+    pub atoms: Vec<Vec3>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub radii: Vec<f64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -52,9 +63,29 @@ pub struct StructureData {
     pub segments: Vec<BackboneSegment>,
     #[serde(default)]
     pub molecules: Vec<Molecule>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chain_atoms: Vec<ChainAtoms>,
     pub chains: Vec<Chain>,
     pub residue_count: usize,
     pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RenderMode {
+    #[default]
+    Ribbon,
+    Slice,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SliceAxis {
+    X,
+    Y,
+    #[default]
+    Z,
+    View,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -104,6 +135,8 @@ fn default_molecule_styles() -> BTreeMap<String, MoleculeStyle> {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RenderOptions {
+    #[serde(default)]
+    pub render_mode: RenderMode,
     pub paper: Paper,
     pub landscape: bool,
     pub width_mm: f64,
@@ -122,12 +155,59 @@ pub struct RenderOptions {
     pub border_passes: usize,
     pub border_spacing_mm: f64,
     pub stroke_direction: StrokeDirection,
+    #[serde(default)]
+    pub slice_axis: SliceAxis,
+    #[serde(default = "default_slice_count")]
+    pub slice_count: usize,
+    #[serde(default = "default_slice_coarseness")]
+    pub slice_coarseness: usize,
+    #[serde(default = "default_slice_probe")]
+    pub slice_probe_angstrom: f64,
+    #[serde(default = "default_slice_max_passes")]
+    pub slice_max_passes: usize,
+    #[serde(default = "default_slice_max_parallel")]
+    pub slice_max_parallel: usize,
+    #[serde(default = "default_slice_parallel_spacing")]
+    pub slice_parallel_spacing_mm: f64,
+    #[serde(default = "default_slice_depth_gamma")]
+    pub slice_depth_gamma: f64,
+    #[serde(default = "default_slice_perspective")]
+    pub slice_perspective: bool,
+    #[serde(default = "default_slice_ink_opacity")]
+    pub slice_ink_opacity: f64,
     pub selected_chains: Vec<String>,
     pub chain_colors: BTreeMap<String, String>,
 }
 
 fn default_lipid_width() -> f64 {
     0.4
+}
+fn default_slice_count() -> usize {
+    28
+}
+fn default_slice_coarseness() -> usize {
+    40
+}
+fn default_slice_probe() -> f64 {
+    1.4
+}
+fn default_slice_max_passes() -> usize {
+    4
+}
+fn default_slice_max_parallel() -> usize {
+    3
+}
+fn default_slice_parallel_spacing() -> f64 {
+    0.22
+}
+fn default_slice_depth_gamma() -> f64 {
+    1.4
+}
+fn default_slice_perspective() -> bool {
+    true
+}
+fn default_slice_ink_opacity() -> f64 {
+    0.35
 }
 
 impl RenderOptions {
@@ -138,10 +218,11 @@ impl RenderOptions {
             .unwrap_or_else(|| default_molecule_style(category))
     }
     pub(crate) fn max_pen_width(&self, structure: &StructureData) -> f64 {
-        if structure
-            .molecules
-            .iter()
-            .any(|m| m.category == "lipid" && self.selected_chains.contains(&m.chain_id))
+        if self.render_mode == RenderMode::Ribbon
+            && structure
+                .molecules
+                .iter()
+                .any(|m| m.category == "lipid" && self.selected_chains.contains(&m.chain_id))
         {
             self.pen_width_mm.max(self.lipid_width_mm)
         } else {
@@ -153,6 +234,7 @@ impl RenderOptions {
 impl Default for RenderOptions {
     fn default() -> Self {
         Self {
+            render_mode: RenderMode::Ribbon,
             paper: Paper::A4,
             landscape: false,
             width_mm: 210.0,
@@ -169,6 +251,16 @@ impl Default for RenderOptions {
             border_passes: 3,
             border_spacing_mm: 0.1,
             stroke_direction: StrokeDirection::Backbone,
+            slice_axis: SliceAxis::Z,
+            slice_count: default_slice_count(),
+            slice_coarseness: default_slice_coarseness(),
+            slice_probe_angstrom: default_slice_probe(),
+            slice_max_passes: default_slice_max_passes(),
+            slice_max_parallel: default_slice_max_parallel(),
+            slice_parallel_spacing_mm: default_slice_parallel_spacing(),
+            slice_depth_gamma: default_slice_depth_gamma(),
+            slice_perspective: default_slice_perspective(),
+            slice_ink_opacity: default_slice_ink_opacity(),
             selected_chains: Vec::new(),
             chain_colors: BTreeMap::new(),
         }
@@ -276,6 +368,22 @@ impl RenderRequest {
         if !bounded(o.loop_spacing_mm, 0.02, 10.0) || !bounded(o.border_spacing_mm, 0.01, 10.0) {
             return fail("loopSpacingMm must be 0.02..10 and borderSpacingMm 0.01..10");
         }
+        if !(2..=120).contains(&o.slice_count)
+            || o.slice_coarseness > 100
+            || !bounded(o.slice_probe_angstrom, 0.0, 3.5)
+        {
+            return fail(
+                "sliceCount must be 2..120, sliceCoarseness 0..100, and sliceProbeAngstrom 0..3.5",
+            );
+        }
+        if !(1..=8).contains(&o.slice_max_passes)
+            || !(1..=7).contains(&o.slice_max_parallel)
+            || !bounded(o.slice_parallel_spacing_mm, 0.05, 2.0)
+            || !bounded(o.slice_depth_gamma, 0.4, 3.2)
+            || !bounded(o.slice_ink_opacity, 0.1, 1.0)
+        {
+            return fail("sliceMaxPasses must be 1..8, sliceMaxParallel 1..7, sliceParallelSpacingMm 0.05..2, sliceDepthGamma 0.4..3.2, and sliceInkOpacity 0.1..1");
+        }
         let s = &self.structure;
         if s.name.len() > 1024
             || s.warnings.len() > 100
@@ -322,7 +430,9 @@ impl RenderRequest {
             }
             count += n;
             samples += (n - 1) * o.samples + 1;
-            if count > MAX_RESIDUES || samples > MAX_SAMPLES {
+            if count > MAX_RESIDUES
+                || (o.render_mode == RenderMode::Ribbon && samples > MAX_SAMPLES)
+            {
                 return fail("Structure exceeds 50000 residues or 200000 spline samples; reduce samples or input size");
             }
             for (i, residue) in segment.residues.iter().enumerate() {
@@ -370,6 +480,14 @@ impl RenderRequest {
                     "Molecular coordinates must be finite and within +/-1000000 angstroms",
                 );
             }
+            if !molecule.radii.is_empty()
+                && (molecule.radii.len() != molecule.atoms.len()
+                    || molecule.radii.iter().any(|r| !bounded(*r, 0.5, 4.0)))
+            {
+                return fail(
+                    "Molecular atom radii must match atom count and be within 0.5..4 angstroms",
+                );
+            }
             let mut pairs = HashSet::new();
             let mut connected = vec![false; molecule.atoms.len()];
             for &[a, b] in &molecule.bonds {
@@ -386,6 +504,38 @@ impl RenderRequest {
             wire_edges += molecule.bonds.len() + 16 * connected.iter().filter(|&&v| !v).count();
             if wire_edges > MAX_EDGES {
                 return fail("Molecular outlines exceed 1000000 edges; export fewer components");
+            }
+        }
+        let mut chain_atom_ids = HashSet::new();
+        for entry in &s.chain_atoms {
+            if !ids.contains(entry.chain_id.as_str())
+                || !chain_atom_ids.insert(entry.chain_id.as_str())
+                || molecular_ids.contains(entry.chain_id.as_str())
+                || entry.atoms.is_empty()
+            {
+                return fail(
+                    "chainAtoms need distinct known protein chain IDs and non-empty atom coordinates",
+                );
+            }
+            atoms = atoms.saturating_add(entry.atoms.len());
+            if atoms > 250_000 {
+                return fail("Atomic geometry exceeds 250000 atoms");
+            }
+            if entry
+                .atoms
+                .iter()
+                .flatten()
+                .any(|v| !bounded(*v, -1e6, 1e6))
+            {
+                return fail("Protein coordinates must be finite and within +/-1000000 angstroms");
+            }
+            if !entry.radii.is_empty()
+                && (entry.radii.len() != entry.atoms.len()
+                    || entry.radii.iter().any(|r| !bounded(*r, 0.5, 4.0)))
+            {
+                return fail(
+                    "Protein atom radii must match atom count and be within 0.5..4 angstroms",
+                );
             }
         }
         if s.residue_count > MAX_RESIDUES {

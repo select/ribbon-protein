@@ -18,6 +18,7 @@ fn request() -> RenderRequest {
                         [5.0, 0.0, 0.0],
                     ],
                     bonds: vec![[0, 1], [1, 2]],
+                    radii: vec![],
                 },
                 Molecule {
                     chain_id: "ion".into(),
@@ -25,8 +26,10 @@ fn request() -> RenderRequest {
                     category: "ion".into(),
                     atoms: vec![[0.0, 4.0, 1.0]],
                     bonds: vec![],
+                    radii: vec![],
                 },
             ],
+            chain_atoms: vec![],
             chains: vec![
                 Chain {
                     id: "ligand".into(),

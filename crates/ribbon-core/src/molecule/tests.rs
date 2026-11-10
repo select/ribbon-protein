@@ -13,6 +13,7 @@ fn molecule(atoms: Vec<V3>, bonds: Vec<[usize; 2]>) -> Molecule {
         category: "lipid".into(),
         atoms,
         bonds,
+        radii: vec![],
     }
 }
 fn project(m: &Molecule, width: f64, lines: usize) -> Vec<ProjectedPath> {

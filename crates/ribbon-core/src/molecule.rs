@@ -569,6 +569,7 @@ pub(crate) fn preview(molecules: &[&Molecule]) -> Vec<PreviewMolecule> {
                     category: m.category.clone(),
                     atoms,
                     bonds,
+                    radii: vec![],
                 },
                 terminal_atoms,
             })

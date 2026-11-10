@@ -9,6 +9,7 @@ mod model;
 mod molecule;
 mod paths;
 mod ribbon;
+mod slicer;
 
 pub use model::*;
 use std::collections::{BTreeMap, HashSet};
@@ -41,6 +42,10 @@ pub fn render_json_native(request: &str) -> Result<String, RenderError> {
 /// retains prepared geometry and the last view's per-segment joined paths.
 pub fn render(request: &RenderRequest) -> Result<RenderResult, RenderError> {
     request.validate()?;
+    if request.options.render_mode == RenderMode::Slice {
+        let prepared = slicer::prepare_slices(request, false)?;
+        return slicer::render_from_prepared(request, &prepared, false);
+    }
     let prepared = prepare(request);
     let (joined, _) = draw(request, &prepared, false)?;
     finish(request, &joined)
@@ -395,6 +400,7 @@ fn finish(request: &RenderRequest, joined: &Joined) -> Result<RenderResult, Rend
 pub struct RenderSession {
     request: RenderRequest,
     prepared: std::collections::VecDeque<Prepared>,
+    slice_prepared: std::collections::VecDeque<slicer::PreparedSlices>,
     joined: Option<(RenderOptions, Joined)>,
 }
 impl RenderSession {
@@ -407,6 +413,7 @@ impl RenderSession {
         Ok(Self {
             request,
             prepared: Default::default(),
+            slice_prepared: Default::default(),
             joined: None,
         })
     }
@@ -417,6 +424,50 @@ impl RenderSession {
     ) -> Result<(RenderResult, StageTimings), RenderError> {
         self.request.options = options;
         self.request.validate()?;
+        if self.request.options.render_mode == RenderMode::Slice {
+            let slice_key = slicer::SliceKey::new(&self.request.structure, &self.request.options);
+            let started = now();
+            let index = self.slice_prepared.iter().position(|p| p.key == slice_key);
+            if preview && index.is_none() {
+                // Never insert preview-coarsened voxel contours into exact cache.
+                let temp = slicer::prepare_slices(&self.request, true)?;
+                let prepare_ms = now() - started;
+                let finish_started = now();
+                let result = slicer::render_from_prepared(&self.request, &temp, true)?;
+                return Ok((
+                    result,
+                    StageTimings {
+                        prepare_ms,
+                        finish_ms: now() - finish_started,
+                        ..Default::default()
+                    },
+                ));
+            }
+            let geometry_hit = index.is_some();
+            if let Some(index) = index {
+                let entry = self.slice_prepared.remove(index).unwrap();
+                self.slice_prepared.push_front(entry);
+            } else {
+                if self.slice_prepared.len() == 2 {
+                    self.slice_prepared.pop_back();
+                }
+                self.slice_prepared
+                    .push_front(slicer::prepare_slices(&self.request, false)?);
+            }
+            let prepare_ms = now() - started;
+            let finish_started = now();
+            let result =
+                slicer::render_from_prepared(&self.request, &self.slice_prepared[0], preview)?;
+            return Ok((
+                result,
+                StageTimings {
+                    prepare_ms,
+                    finish_ms: now() - finish_started,
+                    geometry_cache_hit: geometry_hit,
+                    ..Default::default()
+                },
+            ));
+        }
         let mut key = self.request.options.clone();
         key.chain_colors.clear();
         // The joined cache is independent only of colors; pen width affects fit.
@@ -498,6 +549,54 @@ impl RenderSession {
     /// synchronous full-quality WASM is busy. Full-sample PCA is retained.
     pub fn preview_scene_json(&mut self) -> Result<String, String> {
         self.request.validate().map_err(|e| e.to_string())?;
+        if self.request.options.render_mode == RenderMode::Slice {
+            let slice_key = slicer::SliceKey::new(&self.request.structure, &self.request.options);
+            let index =
+                if let Some(index) = self.slice_prepared.iter().position(|p| p.key == slice_key) {
+                    index
+                } else {
+                    if self.slice_prepared.len() == 2 {
+                        self.slice_prepared.pop_back();
+                    }
+                    let prepared =
+                        slicer::prepare_slices(&self.request, false).map_err(|e| e.to_string())?;
+                    self.slice_prepared.push_front(prepared);
+                    0
+                };
+            let prepared = &self.slice_prepared[index];
+            let total_pts: usize = prepared.loops.iter().map(Vec::len).sum();
+            let stride = total_pts.div_ceil(3200).max(1);
+            let slices: Vec<Vec<math::V3>> = prepared
+                .loops
+                .iter()
+                .filter_map(|loop_pts| {
+                    if stride == 1 || loop_pts.len() <= 6 {
+                        return Some(loop_pts.clone());
+                    }
+                    let sampled: Vec<math::V3> = loop_pts.iter().step_by(stride).copied().collect();
+                    (sampled.len() >= 3).then_some(sampled)
+                })
+                .collect();
+            #[derive(serde::Serialize)]
+            #[serde(rename_all = "camelCase")]
+            struct SliceScene {
+                center: math::V3,
+                basis: [math::V3; 3],
+                ribbons: [(); 0],
+                molecules: [(); 0],
+                slices: Vec<Vec<math::V3>>,
+                slice_radius: f64,
+            }
+            return serde_json::to_string(&SliceScene {
+                center: prepared.camera.center,
+                basis: prepared.camera.basis,
+                ribbons: [],
+                molecules: [],
+                slices,
+                slice_radius: prepared.radius,
+            })
+            .map_err(|e| e.to_string());
+        }
         let indices = selected_indices(&self.request);
         let index = self
             .prepared
@@ -630,7 +729,7 @@ fn fit_page(
     Ok(())
 }
 
-fn xml(text: &str) -> String {
+pub(crate) fn xml(text: &str) -> String {
     let mut escaped = String::with_capacity(text.len());
     for ch in text.chars() {
         match ch {
