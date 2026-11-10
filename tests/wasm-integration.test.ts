@@ -245,11 +245,26 @@ describe.skipIf(!available)(
         );
 
         const scene = JSON.parse(session.preview_scene_json()) as PreviewScene;
-        expect(scene.slices?.length).toBeGreaterThan(4);
+        expect(scene.sliceGroups?.[0]?.loops.length).toBeGreaterThan(4);
         expect(JSON.stringify(scene)).not.toMatch(/null|NaN|Infinity/);
         const drag = renderInteractionPreview(scene, options);
         validateSvg(drag.svg);
         expect(drag.svg).toContain('stroke="black" stroke-opacity="0.35"');
+
+        // Per-component hybrid: protein in Slicer mode + lipid in Ribbon mode.
+        options.renderMode = "ribbon";
+        options.chainModes = { [protein.chains[0]!.id]: "slice" };
+        options.chainColors = { [lipid.chains[0]!.id]: "#c4302b" };
+        const hybrid = JSON.parse(session.render_options_json(JSON.stringify(options), false));
+        expect(hybrid.result).toEqual(
+          JSON.parse(renderJson(JSON.stringify({ structure, options }))),
+        );
+        validateSvg(hybrid.result.svg);
+        expect(hybrid.result.svg).toContain('stroke="black" stroke-opacity="0.35"');
+        expect(hybrid.result.svg).toContain('stroke="#c4302b"');
+        const hybridScene = JSON.parse(session.preview_scene_json()) as PreviewScene;
+        expect(hybridScene.molecules?.length).toBe(1);
+        expect(hybridScene.sliceGroups?.length).toBe(1);
       } finally {
         session.free();
       }

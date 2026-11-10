@@ -201,7 +201,7 @@ describe("bounded display-only prepared 3D preview", () => {
     options.samples = 2;
     expect(previewGeometryKey(options)).not.toBe(selected);
   });
-  it("renders slice interaction previews with translucent black strokes and slice-specific geometry keys", () => {
+  it("renders slice and hybrid interaction previews with translucent slice groups and opaque ribbons", () => {
     const sliceScene: PreviewScene = {
       center: [0, 0, 0],
       basis: [
@@ -210,23 +210,29 @@ describe("bounded display-only prepared 3D preview", () => {
         [0, 0, 1],
       ],
       ribbons: [],
-      slices: [
-        [
-          [-4, -3, -2],
-          [4, -3, -2],
-          [4, 3, -2],
-          [-4, 3, -2],
-        ],
-        [
-          [-3, -2, 3],
-          [3, -2, 3],
-          [0, 3, 3],
-        ],
+      sliceGroups: [
+        {
+          color: "black",
+          loops: [
+            [
+              [-4, -3, -2],
+              [4, -3, -2],
+              [4, 3, -2],
+              [-4, 3, -2],
+            ],
+            [
+              [-3, -2, 3],
+              [3, -2, 3],
+              [0, 3, 3],
+            ],
+          ],
+        },
       ],
       sliceRadius: 6,
     };
     const options = defaultRenderOptions();
-    options.renderMode = "slice";
+    options.selectedChains = ["A"];
+    options.chainModes = { A: "slice" };
     options.sliceInkOpacity = 0.35;
     const first = renderInteractionPreview(sliceScene, options);
     validateSvg(first.svg);
@@ -237,6 +243,19 @@ describe("bounded display-only prepared 3D preview", () => {
     expect(rotated.svg).not.toBe(first.svg);
     options.slicePerspective = false;
     expect(renderInteractionPreview(sliceScene, options).svg).not.toBe(rotated.svg);
+
+    const hybridScene: PreviewScene = {
+      ...sliceScene,
+      ribbons: scene.ribbons,
+    };
+    options.selectedChains = ["A", "B"];
+    options.chainModes = { A: "ribbon", B: "slice" };
+    options.chainColors = { A: "#c4302b" };
+    const hybrid = renderInteractionPreview(hybridScene, options);
+    validateSvg(hybrid.svg);
+    expect(hybrid.strokeCount).toBe(4);
+    expect(hybrid.svg).toContain('stroke="black" stroke-opacity="0.35"');
+    expect(hybrid.svg).toContain('stroke="#c4302b"');
 
     const fixedKey = previewGeometryKey(options);
     options.rotation = [50, 10, -5];

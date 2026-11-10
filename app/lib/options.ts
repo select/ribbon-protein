@@ -1,10 +1,13 @@
 import type { RenderOptions, StructureData } from "../types/render";
 import { LIMITS } from "./limits";
+import { modeOf } from "./molecule-groups";
 
 export function drawingPenWidth(o: RenderOptions, s: Pick<StructureData, "molecules">): number {
-  if (o.renderMode === "slice") return o.penWidthMm;
   const hasLipids = s.molecules?.some(
-    (m) => m.category === "lipid" && o.selectedChains.includes(m.chainId),
+    (m) =>
+      m.category === "lipid" &&
+      o.selectedChains.includes(m.chainId) &&
+      modeOf(o, m.chainId) === "ribbon",
   );
   return hasLipids ? Math.max(o.penWidthMm, o.lipidWidthMm) : o.penWidthMm;
 }
@@ -70,17 +73,20 @@ export function validateOptions(o: RenderOptions, s: StructureData): void {
     throw new Error(
       "Chain colors must be black, red or six-digit #RRGGBB values for known chains.",
     );
-  if (o.renderMode === "ribbon") {
-    const samples = s.segments.reduce(
-      (n, segment) => n + (segment.residues.length - 1) * o.samples + 1,
-      0,
+  if (
+    Object.entries(o.chainModes).some(
+      ([id, mode]) => !chains.has(id) || (mode !== "ribbon" && mode !== "slice"),
+    )
+  )
+    throw new Error("Component render modes must be ribbon or slice for known chains.");
+  const samples = s.segments
+    .filter((segment) => modeOf(o, segment.chainId) === "ribbon")
+    .reduce((n, segment) => n + (segment.residues.length - 1) * o.samples + 1, 0);
+  if (samples > 200_000)
+    throw new Error("Too many spline samples (limit 200,000). Reduce quality or protein size.");
+  const work = samples * (o.lines + 2 * o.borderPasses + (o.fillLoops ? 24 : 0));
+  if (work > LIMITS.renderWork)
+    throw new Error(
+      "This structure/quality combination exceeds the local workload limit. Reduce samples, lines, or disable loop fill.",
     );
-    if (samples > 200_000)
-      throw new Error("Too many spline samples (limit 200,000). Reduce quality or protein size.");
-    const work = samples * (o.lines + 2 * o.borderPasses + (o.fillLoops ? 24 : 0));
-    if (work > LIMITS.renderWork)
-      throw new Error(
-        "This structure/quality combination exceeds the local workload limit. Reduce samples, lines, or disable loop fill.",
-      );
-  }
 }

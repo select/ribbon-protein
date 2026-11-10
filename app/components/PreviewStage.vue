@@ -2,6 +2,7 @@
 import { computed, inject, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import type { RenderResult, Vec3 } from "~/types/render";
 import type { Studio, StudioUi } from "../app.vue";
+import { hasSelectedMode } from "../lib/molecule-groups";
 import AppIcon from "./AppIcon.vue";
 
 const studio = inject<Studio>("ribbon")!;
@@ -194,7 +195,9 @@ const noChains = computed(() => hasStructure.value && studio.options.selectedCha
 
 const previewLabel = computed(() => {
   const name = studio.fileName || studio.structure?.name || "structure";
-  const kind = studio.options.renderMode === "slice" ? "Slice" : "Ribbon";
+  const slc = hasSelectedMode(studio.options, "slice");
+  const rib = hasSelectedMode(studio.options, "ribbon");
+  const kind = slc && rib ? "Hybrid" : slc ? "Slice" : "Ribbon";
   return `${kind} preview of ${name}, rotation ${rotationText.value}. Drag or use arrow keys to rotate.`;
 });
 

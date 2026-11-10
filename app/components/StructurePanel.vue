@@ -1,13 +1,19 @@
 <script setup lang="ts">
 import { computed, inject, ref, watch } from "vue";
+import type { RenderMode } from "~/types/render";
 import type { Studio, StudioUi } from "../app.vue";
 import AppIcon from "./AppIcon.vue";
 import StudioSection from "./StudioSection.vue";
 import {
   colorMoleculeGroup,
   componentGroups,
+  groupRenderMode,
   groupSwatchColor,
+  hasSelectedMode,
+  modeMoleculeGroup,
+  modeOf,
   selectMoleculeGroup,
+  setComponentMode,
 } from "../lib/molecule-groups";
 
 const studio = inject<Studio>("ribbon")!;
@@ -16,12 +22,13 @@ const ui = inject<StudioUi>("ribbon-ui")!;
 const DEFAULT_INK = "#191918";
 
 const busy = computed(() => studio.status === "loading");
-const isSlice = computed(() => studio.options.renderMode === "slice");
 const chains = computed(() => studio.structure?.chains ?? []);
 const chainById = computed(() => new Map(chains.value.map((c) => [c.id, c])));
 const selected = computed(() => new Set(studio.options.selectedChains));
 const molecules = computed(() => new Map(studio.structure?.molecules?.map((m) => [m.chainId, m])));
 const groups = computed(() => (studio.structure ? componentGroups(studio.structure) : []));
+const hasSlice = computed(() => hasSelectedMode(studio.options, "slice"));
+const hasRibbon = computed(() => hasSelectedMode(studio.options, "ribbon"));
 
 const expanded = ref<Record<string, boolean>>({});
 watch(
@@ -89,6 +96,22 @@ function setColor(id: string, color: string) {
 
 function setGroupColor(ids: string[], color: string) {
   colorMoleculeGroup(studio.options, ids, color);
+}
+
+function childModeOf(id: string): RenderMode {
+  return modeOf(studio.options, id);
+}
+
+function parentModeOf(ids: string[]): RenderMode | "mixed" {
+  return groupRenderMode(studio.options, ids);
+}
+
+function setChildMode(id: string, mode: RenderMode) {
+  setComponentMode(studio.options, id, mode);
+}
+
+function setGroupMode(ids: string[], mode: RenderMode) {
+  modeMoleculeGroup(studio.options, ids, mode);
 }
 
 function chainLabel(id: string): string {
@@ -207,13 +230,40 @@ function countLabel(id: string): string {
                   :aria-label="`Show all ${group.label.toLowerCase()}`"
                   @change="toggleGroup(group.ids, ($event.target as HTMLInputElement).checked)"
                 />
-                <span class="group-title">{{ group.label }}</span>
+                <span class="group-title" :title="group.label">{{ group.label }}</span>
                 <span class="row-count rs-num"
                   >{{ groupCount(group.ids) }}/{{ group.ids.length }}</span
                 >
               </label>
+              <div
+                class="mode-pill"
+                role="group"
+                :aria-label="`Render mode for ${group.label.toLowerCase()}`"
+              >
+                <button
+                  type="button"
+                  class="mode-btn"
+                  :class="{ 'is-active': parentModeOf(group.ids) === 'ribbon' }"
+                  :aria-pressed="parentModeOf(group.ids) === 'ribbon'"
+                  :title="`Ribbon mode for all ${group.label.toLowerCase()}`"
+                  :aria-label="`Ribbon mode for all ${group.label.toLowerCase()}`"
+                  @click="setGroupMode(group.ids, 'ribbon')"
+                >
+                  <AppIcon name="ribbon" :size="11" />
+                </button>
+                <button
+                  type="button"
+                  class="mode-btn"
+                  :class="{ 'is-active': parentModeOf(group.ids) === 'slice' }"
+                  :aria-pressed="parentModeOf(group.ids) === 'slice'"
+                  :title="`Slicer mode for all ${group.label.toLowerCase()}`"
+                  :aria-label="`Slicer mode for all ${group.label.toLowerCase()}`"
+                  @click="setGroupMode(group.ids, 'slice')"
+                >
+                  <AppIcon name="layers" :size="11" />
+                </button>
+              </div>
               <label
-                v-if="!isSlice"
                 class="color-dot"
                 :style="{ '--swatch': parentColorOf(group.ids) }"
                 :title="`Choose pen color for all ${group.label.toLowerCase()}`"
@@ -249,8 +299,35 @@ function countLabel(id: string): string {
                   <span class="chain-id rs-num" :title="chainLabel(id)">{{ chainLabel(id) }}</span>
                   <span class="row-count rs-num">{{ countLabel(id) }}</span>
                 </label>
+                <div
+                  class="mode-pill"
+                  role="group"
+                  :aria-label="`Render mode for ${chainLabel(id)}`"
+                >
+                  <button
+                    type="button"
+                    class="mode-btn"
+                    :class="{ 'is-active': childModeOf(id) === 'ribbon' }"
+                    :aria-pressed="childModeOf(id) === 'ribbon'"
+                    :title="`Ribbon mode for ${chainLabel(id)}`"
+                    :aria-label="`Ribbon mode for ${chainLabel(id)}`"
+                    @click="setChildMode(id, 'ribbon')"
+                  >
+                    <AppIcon name="ribbon" :size="11" />
+                  </button>
+                  <button
+                    type="button"
+                    class="mode-btn"
+                    :class="{ 'is-active': childModeOf(id) === 'slice' }"
+                    :aria-pressed="childModeOf(id) === 'slice'"
+                    :title="`Slicer mode for ${chainLabel(id)}`"
+                    :aria-label="`Slicer mode for ${chainLabel(id)}`"
+                    @click="setChildMode(id, 'slice')"
+                  >
+                    <AppIcon name="layers" :size="11" />
+                  </button>
+                </div>
                 <label
-                  v-if="!isSlice"
                   class="color-dot"
                   :style="{ '--swatch': colorOf(id) }"
                   :title="`Choose pen color for ${chainLabel(id)}`"
@@ -270,15 +347,19 @@ function countLabel(id: string): string {
         <p v-if="selectedCount === 0" class="rs-hint warn" role="status">
           No components selected — select at least one component to draw.
         </p>
-        <p v-else-if="isSlice" class="rs-hint">
-          Selected components form a unified heavy-atom surface envelope plotted in black. Water is
-          hidden initially; hydrogens are omitted.
+        <p v-else-if="hasSlice && hasRibbon" class="rs-hint">
+          Hybrid plot: ribbon and sliced components share one 3D coordinate frame. Slicer depth uses
+          multi-pass overdrawing and parallel contours — no line fading.
+        </p>
+        <p v-else-if="hasSlice" class="rs-hint">
+          Topographic heavy-atom surface slices. Depth uses multi-pass overdrawing and parallel
+          lines — no line fading. Same-color slice components share one envelope.
         </p>
         <p v-else class="rs-hint">
           {{ selectedResidues.toLocaleString() }} protein residues selected (local DSSP).
           <template v-if="molecules.size"
-            >Non-proteins: heavy-atom bond bands and isolated-atom circles. Water is hidden
-            initially; hydrogens are omitted.</template
+            >Switch any group or component between ribbon and slicer in the tree; water starts
+            hidden.</template
           >
         </p>
       </div>
@@ -357,7 +438,7 @@ function countLabel(id: string): string {
 }
 
 .component-tree {
-  max-height: 264px;
+  max-height: 272px;
   margin: 0;
   padding: 3px;
   overflow-y: auto;
@@ -374,8 +455,8 @@ function countLabel(id: string): string {
 .tree-row {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 4px 0 2px;
+  gap: 3px;
+  padding: 0 2px;
   border-radius: var(--rs-radius-sm);
 }
 
@@ -387,7 +468,7 @@ function countLabel(id: string): string {
   display: inline-grid;
   place-items: center;
   flex: none;
-  width: 20px;
+  width: 18px;
   height: 22px;
   padding: 0;
   border: 0;
@@ -412,23 +493,23 @@ function countLabel(id: string): string {
 }
 
 .tree-children {
-  margin: 0 0 2px 11px;
-  padding: 0 0 0 9px;
+  margin: 0 0 2px 10px;
+  padding: 0 0 0 8px;
   list-style: none;
   border-left: 1px solid var(--rs-line);
 }
 
 .tree-child {
-  padding-left: 4px;
+  padding-left: 3px;
 }
 
 .row-check {
   display: flex;
   flex: 1 1 auto;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   min-width: 0;
-  min-height: 27px;
+  min-height: 28px;
   padding: 0 2px;
   cursor: pointer;
 }
@@ -447,7 +528,7 @@ function countLabel(id: string): string {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--rs-ink-strong);
 }
@@ -457,15 +538,15 @@ function countLabel(id: string): string {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--rs-ink-strong);
 }
 
 .row-count {
   margin-left: auto;
-  padding-left: 6px;
-  font-size: 11.5px;
+  padding-left: 4px;
+  font-size: 11px;
   color: var(--rs-muted);
   white-space: nowrap;
 }
@@ -474,6 +555,50 @@ function countLabel(id: string): string {
 .is-off .chain-id,
 .is-off .row-count {
   color: var(--rs-faint);
+}
+
+.mode-pill {
+  display: inline-flex;
+  flex: none;
+  gap: 1px;
+  padding: 1px;
+  border-radius: var(--rs-radius-sm);
+  background: rgba(55, 53, 47, 0.06);
+}
+
+.mode-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 19px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--rs-muted);
+  cursor: pointer;
+  transition:
+    background-color 120ms var(--rs-ease),
+    color 120ms var(--rs-ease);
+}
+
+.mode-btn:hover {
+  color: var(--rs-ink-strong);
+}
+
+.mode-btn.is-active {
+  background: var(--rs-surface);
+  color: var(--rs-ink-strong);
+  box-shadow: 0 0 0 1px var(--rs-line);
+}
+
+.mode-btn:focus-visible {
+  outline: 2px solid var(--rs-focus);
+  outline-offset: 1px;
+}
+
+.is-off .mode-pill {
+  opacity: 0.5;
 }
 
 .color-dot {

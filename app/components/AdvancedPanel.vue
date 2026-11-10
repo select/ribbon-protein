@@ -2,19 +2,25 @@
 import { computed, inject } from "vue";
 import type { RenderOptions } from "~/types/render";
 import type { Studio } from "../app.vue";
+import { hasSelectedMode } from "../lib/molecule-groups";
 import RangeField from "./RangeField.vue";
 import SegmentedControl from "./SegmentedControl.vue";
 import StudioSection from "./StudioSection.vue";
 import ToggleSwitch from "./ToggleSwitch.vue";
 
 const studio = inject<Studio>("ribbon")!;
-const isSlice = computed(() => studio.options.renderMode === "slice");
+const hasSlice = computed(() => hasSelectedMode(studio.options, "slice"));
+const hasRibbon = computed(
+  () => !studio.structure || hasSelectedMode(studio.options, "ribbon") || !hasSlice.value,
+);
+const pureSlice = computed(() => hasSlice.value && !hasSelectedMode(studio.options, "ribbon"));
+
 const directionOptions = computed(
   (): { value: RenderOptions["strokeDirection"]; label: string; title: string }[] => [
     {
       value: "backbone",
-      label: isSlice.value ? "Contour" : "Backbone",
-      title: isSlice.value
+      label: pureSlice.value ? "Contour" : "Backbone",
+      title: pureSlice.value
         ? "Preserve slice and contour winding order"
         : "Smooth forward joins, paths never reversed",
     },
@@ -25,7 +31,7 @@ const directionHint = computed(() => {
   if (studio.options.strokeDirection === "travel") {
     return "Paths may be reversed and reordered to minimise pen-up travel.";
   }
-  return isSlice.value
+  return pureSlice.value
     ? "Slices plot from back to front, keeping multi-pass overdraws grouped per track."
     : "Paths follow the chain direction with smooth forward joins.";
 });
@@ -33,30 +39,35 @@ const directionHint = computed(() => {
 
 <template>
   <StudioSection title="Advanced" collapsible :default-open="false">
-    <template v-if="isSlice">
+    <RangeField
+      v-if="hasRibbon"
+      v-model="studio.options.samples"
+      label="Samples per residue"
+      :min="2"
+      :max="64"
+      :step="1"
+      hint="Higher is smoother and slower for ribbon components."
+    />
+    <template v-if="hasSlice">
       <RangeField
         v-model="studio.options.sliceInkOpacity"
         label="Preview ink opacity"
         :min="0.1"
         :max="1"
         :step="0.05"
-        hint="Simulates physical ink buildup in the SVG preview where strokes overlap or retrace."
+        hint="Simulates physical ink buildup in the SVG preview where slice strokes overlap or retrace."
       />
       <ToggleSwitch
         v-model="studio.options.slicePerspective"
         label="Perspective"
-        hint="Foreshorten deeper contour slices from the camera."
+        :disabled="!pureSlice"
+        :hint="
+          pureSlice
+            ? 'Foreshorten deeper contour slices from the camera.'
+            : 'Orthographic projection is used when combining ribbons and slices so coordinates align.'
+        "
       />
     </template>
-    <RangeField
-      v-else
-      v-model="studio.options.samples"
-      label="Samples per residue"
-      :min="2"
-      :max="64"
-      :step="1"
-      hint="Higher is smoother and slower."
-    />
     <div class="direction">
       <SegmentedControl
         v-model="studio.options.strokeDirection"

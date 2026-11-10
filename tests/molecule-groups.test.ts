@@ -2,9 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   colorMoleculeGroup,
   componentGroups,
+  groupRenderMode,
   groupSwatchColor,
+  modeMoleculeGroup,
+  modeOf,
   moleculeGroups,
   selectMoleculeGroup,
+  setComponentMode,
 } from "../app/lib/molecule-groups";
 import { drawingPenWidth, validateOptions } from "../app/lib/options";
 import { defaultRenderOptions } from "../app/types/render";
@@ -92,6 +96,15 @@ describe("molecule group controls", () => {
     expect(groupSwatchColor(o.chainColors, ["A"])).toBe("#191918");
     colorMoleculeGroup(o, ["A"], "#1f5fbf");
     expect(groupSwatchColor(o.chainColors, ["A"])).toBe("#1f5fbf");
+    expect(groupRenderMode(o, ["l1", "l2"])).toBe("ribbon");
+    setComponentMode(o, "l1", "slice");
+    expect(modeOf(o, "l1")).toBe("slice");
+    expect(modeOf(o, "l2")).toBe("ribbon");
+    expect(groupRenderMode(o, ["l1", "l2"])).toBe("mixed");
+    modeMoleculeGroup(o, ["l1", "l2"], "slice");
+    expect(groupRenderMode(o, ["l1", "l2"])).toBe("slice");
+    modeMoleculeGroup(o, ["l1", "l2"], "ribbon");
+    expect(o.chainModes).toEqual({});
   });
   it("validates slicer options and uses single-pen clearance in slice mode", () => {
     const o = defaultRenderOptions();

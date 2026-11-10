@@ -195,6 +195,7 @@ export function createRibbonStudio(runtime: RibbonRuntime, env: StudioEnvironmen
         .filter((m) => m.category === "lipid")
         .map((m) => [m.chainId, "#c4302b"]),
     );
+    options.chainModes = {};
     quiet = false;
     status.value = "idle";
     await render();

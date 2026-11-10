@@ -11,9 +11,11 @@ interface RibbonWasm {
   default: (options?: { module_or_path: URL }) => Promise<unknown>;
   RenderSession: new (structure: string) => Session;
 }
+const WASM_SCHEMA = "chain-modes-v1";
 const booted = performance.now();
 let first = true;
 let wasm: Promise<RibbonWasm> | undefined;
+let wasmNonce = WASM_SCHEMA;
 let session: Session | undefined;
 let structure: StructureData | undefined;
 let revision: number | undefined;
@@ -21,12 +23,19 @@ let parseDsspMs = 0;
 let moduleInitializations = 0;
 let structureLoads = 0;
 let parses = 0;
+function withVersion(target: URL, v: string): URL {
+  const out = new URL(target.href);
+  out.searchParams.set("v", v);
+  return out;
+}
 function loadWasm(url: string): Promise<RibbonWasm> {
   if (!wasm) {
     wasm = (async () => {
-      const module = (await import(/* @vite-ignore */ url)) as RibbonWasm;
+      const jsUrl = withVersion(new URL(url), wasmNonce);
+      const binUrl = withVersion(new URL("ribbon_core_bg.wasm", url), wasmNonce);
+      const module = (await import(/* @vite-ignore */ jsUrl.href)) as RibbonWasm;
       moduleInitializations++;
-      await module.default({ module_or_path: new URL("ribbon_core_bg.wasm", url) });
+      await module.default({ module_or_path: binUrl });
       if (typeof module.RenderSession !== "function")
         throw new Error("WASM RenderSession export is missing.");
       return module;
@@ -45,8 +54,6 @@ function replace(next: StructureData | undefined, nextRevision: number): void {
   structure = next;
   revision = nextRevision;
 }
-// The client sends only one active message; async module/parser imports can
-// therefore never race another job or create simultaneous synchronous renders.
 self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
   const message = event.data;
   let response: WorkerResponse;
@@ -54,7 +61,6 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
     if (message.type === "parse") {
       replace(undefined, message.revision);
       const started = performance.now();
-      // Keep explicit Vite prebundling in nuxt.config.ts for these lazy imports.
       const { parseStructure } = await import("../lib/parser");
       structure = await parseStructure(message.text, message.name);
       parses++;
@@ -63,7 +69,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
     } else {
       if (message.structure) {
         replace(message.structure, message.revision);
-        parseDsspMs = 0; // Rehydration never reparses atoms or recomputes DSSP.
+        parseDsspMs = 0;
       }
       if (revision !== message.revision || !structure)
         throw new Error("Structure revision is not loaded. Retry the calculation.");
@@ -71,7 +77,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       parseDsspMs = 0;
       const init = performance.now();
       const cold = !wasm;
-      const module = await loadWasm(message.wasmUrl);
+      let module = await loadWasm(message.wasmUrl);
       timings.moduleInitMs = cold ? performance.now() - init : 0;
       const loaded = performance.now();
       if (!session) {
@@ -80,9 +86,31 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       }
       timings.structureLoadMs = performance.now() - loaded;
       const started = performance.now();
-      const output = JSON.parse(
-        session.render_options_json(JSON.stringify(message.options), message.quality === "preview"),
-      ) as { result: RenderResult; timings: RenderTimings };
+      let rawOutput: string;
+      try {
+        rawOutput = session.render_options_json(
+          JSON.stringify(message.options),
+          message.quality === "preview",
+        );
+      } catch (err) {
+        // If WASM was rebuilt during dev HMR, reload the fresh module once automatically.
+        if (String(err).includes("unknown field")) {
+          session?.free();
+          session = undefined;
+          wasm = undefined;
+          wasmNonce = `${WASM_SCHEMA}-${Date.now()}`;
+          module = await loadWasm(message.wasmUrl);
+          session = new module.RenderSession(JSON.stringify(structure));
+          structureLoads++;
+          rawOutput = session.render_options_json(
+            JSON.stringify(message.options),
+            message.quality === "preview",
+          );
+        } else {
+          throw err;
+        }
+      }
+      const output = JSON.parse(rawOutput) as { result: RenderResult; timings: RenderTimings };
       const result = output.result;
       if (message.includePreviewScene)
         result.previewScene = JSON.parse(session.preview_scene_json());

@@ -1,4 +1,10 @@
-import type { Molecule, MoleculeCategory, RenderOptions, StructureData } from "../types/render";
+import type {
+  Molecule,
+  MoleculeCategory,
+  RenderMode,
+  RenderOptions,
+  StructureData,
+} from "../types/render";
 
 const labels: Record<MoleculeCategory, string> = {
   lipid: "Lipids",
@@ -77,4 +83,44 @@ export function colorMoleculeGroup(o: RenderOptions, ids: string[], color: strin
     ...o.chainColors,
     ...Object.fromEntries(ids.map((id) => [id, color.toLowerCase()])),
   };
+}
+
+export function modeOf(
+  o: Pick<RenderOptions, "renderMode" | "chainModes">,
+  id: string,
+): RenderMode {
+  return o.chainModes[id] ?? o.renderMode;
+}
+
+export function hasSelectedMode(
+  o: Pick<RenderOptions, "renderMode" | "chainModes" | "selectedChains">,
+  mode: RenderMode,
+): boolean {
+  return o.selectedChains.some((id) => modeOf(o, id) === mode);
+}
+
+export function groupRenderMode(
+  o: Pick<RenderOptions, "renderMode" | "chainModes">,
+  ids: string[],
+): RenderMode | "mixed" {
+  if (!ids.length) return o.renderMode;
+  const first = modeOf(o, ids[0]!);
+  return ids.every((id) => modeOf(o, id) === first) ? first : "mixed";
+}
+
+export function setComponentMode(o: RenderOptions, id: string, mode: RenderMode): void {
+  const next = { ...o.chainModes };
+  if (mode === o.renderMode) delete next[id];
+  else next[id] = mode;
+  o.chainModes = next;
+}
+
+/** A group mode applies to hidden members too; per-component edits remain possible. */
+export function modeMoleculeGroup(o: RenderOptions, ids: string[], mode: RenderMode): void {
+  const next = { ...o.chainModes };
+  for (const id of ids) {
+    if (mode === o.renderMode) delete next[id];
+    else next[id] = mode;
+  }
+  o.chainModes = next;
 }

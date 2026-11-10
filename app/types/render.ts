@@ -79,6 +79,7 @@ export interface RenderOptions {
   sliceInkOpacity: number;
   selectedChains: string[];
   chainColors: Record<string, string>;
+  chainModes: Record<string, RenderMode>;
 }
 export interface RenderRequest {
   structure: StructureData;
@@ -88,11 +89,15 @@ export interface PreviewMolecule extends Molecule {
   /** True source terminals only; sampled preview cuts must not gain caps. */
   terminalAtoms?: number[];
 }
+export interface PreviewSliceGroup {
+  color: string;
+  loops: Vec3[][];
+}
 export interface PreviewScene {
   center: Vec3;
   basis: [Vec3, Vec3, Vec3];
   molecules?: PreviewMolecule[];
-  slices?: Vec3[][];
+  sliceGroups?: PreviewSliceGroup[];
   sliceRadius?: number;
   ribbons: {
     chainId: string;
@@ -181,5 +186,6 @@ export function defaultRenderOptions(): RenderOptions {
     sliceInkOpacity: 0.35,
     selectedChains: [],
     chainColors: {},
+    chainModes: {},
   };
 }

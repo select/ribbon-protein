@@ -2,6 +2,7 @@
 import { computed, inject } from "vue";
 import type { SliceAxis, Vec3 } from "~/types/render";
 import type { Studio } from "../app.vue";
+import { hasSelectedMode } from "../lib/molecule-groups";
 import AppIcon from "./AppIcon.vue";
 import RangeField from "./RangeField.vue";
 import SegmentedControl from "./SegmentedControl.vue";
@@ -27,7 +28,7 @@ const axes = [
 ];
 
 const isDefault = computed(() => studio.options.rotation.every((value) => value === 0));
-const isSlice = computed(() => studio.options.renderMode === "slice");
+const isSlice = computed(() => hasSelectedMode(studio.options, "slice"));
 const sliceAxes: { value: SliceAxis; label: string; title: string }[] = [
   { value: "x", label: "X", title: "Slice perpendicular to structure X axis" },
   { value: "y", label: "Y", title: "Slice perpendicular to structure Y axis" },
