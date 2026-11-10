@@ -6,11 +6,11 @@
 
 use crate::math::{self, add, dot, lerp, mul, norm, sub, Camera, P2, V3};
 use crate::model::{
-    fail, RenderError, RenderOptions, RenderRequest, RenderResult, SliceAxis, StrokeDirection,
-    StructureData, MAX_PIECES,
+    fail, RenderError, RenderMode, RenderOptions, RenderRequest, RenderResult, SliceAxis,
+    StrokeDirection, StructureData, MAX_PIECES,
 };
 use rstar::{PointDistance, RTree, RTreeObject, AABB};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write;
 
 const BLOB: f64 = 0.55;
@@ -22,7 +22,8 @@ const MIN_LENGTH_MM: f64 = 0.08;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SliceKey {
-    selected: Vec<String>,
+    colored_chains: Vec<(String, String)>,
+    camera_sig: Option<[u64; 12]>,
     axis: SliceAxis,
     view_rotation: Option<[u64; 3]>,
     slice_count: usize,
@@ -30,29 +31,64 @@ pub(crate) struct SliceKey {
     probe_bits: u64,
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PreparedSliceGroup {
+    pub(crate) color: String,
+    pub(crate) loops: Vec<Vec<V3>>,
+}
+
 #[derive(Clone)]
 pub(crate) struct PreparedSlices {
     pub(crate) key: SliceKey,
     pub(crate) camera: Camera,
-    pub(crate) loops: Vec<Vec<V3>>,
+    pub(crate) groups: Vec<PreparedSliceGroup>,
     pub(crate) radius: f64,
     pub(crate) residue_count: usize,
     pub(crate) warnings: Vec<String>,
 }
 
+fn camera_signature(camera: &Camera) -> [u64; 12] {
+    let mut out = [0u64; 12];
+    for i in 0..3 {
+        out[i] = (camera.center[i] + 0.0).to_bits();
+        for j in 0..3 {
+            out[3 + i * 3 + j] = (camera.basis[i][j] + 0.0).to_bits();
+        }
+    }
+    out
+}
+
 impl SliceKey {
-    pub(crate) fn new(structure: &StructureData, options: &RenderOptions) -> Self {
-        let wanted: HashSet<&str> = options.selected_chains.iter().map(String::as_str).collect();
-        let selected = structure
+    pub(crate) fn new(
+        structure: &StructureData,
+        options: &RenderOptions,
+        override_camera: Option<&Camera>,
+    ) -> Self {
+        let wanted: HashSet<&str> = options
+            .selected_chains
+            .iter()
+            .filter(|id| options.mode_of(id) == RenderMode::Slice)
+            .map(String::as_str)
+            .collect();
+        let colored_chains = structure
             .chains
             .iter()
             .filter(|c| wanted.contains(c.id.as_str()))
-            .map(|c| c.id.clone())
+            .map(|c| {
+                let color = options
+                    .chain_colors
+                    .get(&c.id)
+                    .cloned()
+                    .unwrap_or_else(|| "black".into());
+                (c.id.clone(), color)
+            })
             .collect();
         let view_rotation = (options.slice_axis == SliceAxis::View)
             .then(|| options.rotation.map(|angle| (angle + 0.0).to_bits()));
         Self {
-            selected,
+            colored_chains,
+            camera_sig: override_camera.map(camera_signature),
             axis: options.slice_axis,
             view_rotation,
             slice_count: options.slice_count,
@@ -62,24 +98,40 @@ impl SliceKey {
     }
 }
 
-fn collect_atoms(structure: &StructureData, options: &RenderOptions) -> (Vec<(V3, f64)>, usize) {
-    let selected: HashSet<&str> = options.selected_chains.iter().map(String::as_str).collect();
+pub(crate) fn collect_atoms_by_color(
+    structure: &StructureData,
+    options: &RenderOptions,
+) -> (BTreeMap<String, Vec<(V3, f64)>>, usize) {
+    let selected: HashSet<&str> = options
+        .selected_chains
+        .iter()
+        .filter(|id| options.mode_of(id) == RenderMode::Slice)
+        .map(String::as_str)
+        .collect();
+    let color_of = |id: &str| {
+        options
+            .chain_colors
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| "black".into())
+    };
     let mut residue_count = 0usize;
     for segment in &structure.segments {
         if selected.contains(segment.chain_id.as_str()) {
             residue_count += segment.residues.len();
         }
     }
-    let mut atoms = Vec::new();
+    let mut by_color: BTreeMap<String, Vec<(V3, f64)>> = BTreeMap::new();
     let mut covered_chains = HashSet::new();
     for entry in &structure.chain_atoms {
         if !selected.contains(entry.chain_id.as_str()) {
             continue;
         }
         covered_chains.insert(entry.chain_id.as_str());
+        let bucket = by_color.entry(color_of(&entry.chain_id)).or_default();
         for (i, &pos) in entry.atoms.iter().enumerate() {
             let r = entry.radii.get(i).copied().unwrap_or(1.70);
-            atoms.push((pos, r));
+            bucket.push((pos, r));
         }
     }
     for segment in &structure.segments {
@@ -88,12 +140,13 @@ fn collect_atoms(structure: &StructureData, options: &RenderOptions) -> (Vec<(V3
         {
             continue;
         }
+        let bucket = by_color.entry(color_of(&segment.chain_id)).or_default();
         for (i, residue) in segment.residues.iter().enumerate() {
-            atoms.push((residue.ca, 1.85));
+            bucket.push((residue.ca, 1.85));
             let o_dir = math::unit(residue.carbonyl, [0.0, 1.0, 0.0]);
-            atoms.push((add(residue.ca, mul(o_dir, 1.50)), 1.52));
+            bucket.push((add(residue.ca, mul(o_dir, 1.50)), 1.52));
             if i > 0 {
-                atoms.push((lerp(segment.residues[i - 1].ca, residue.ca, 0.5), 1.65));
+                bucket.push((lerp(segment.residues[i - 1].ca, residue.ca, 0.5), 1.65));
             }
         }
     }
@@ -101,12 +154,13 @@ fn collect_atoms(structure: &StructureData, options: &RenderOptions) -> (Vec<(V3
         if !selected.contains(molecule.chain_id.as_str()) {
             continue;
         }
+        let bucket = by_color.entry(color_of(&molecule.chain_id)).or_default();
         for (i, &pos) in molecule.atoms.iter().enumerate() {
             let r = molecule.radii.get(i).copied().unwrap_or(1.70);
-            atoms.push((pos, r));
+            bucket.push((pos, r));
         }
     }
-    (atoms, residue_count)
+    (by_color, residue_count)
 }
 
 fn section_basis(camera: &Camera, options: &RenderOptions) -> [V3; 3] {
@@ -507,9 +561,10 @@ fn simplify_closed_loop(loop_pts: &[P2], tol: f64) -> Option<Vec<P2>> {
 pub(crate) fn prepare_slices(
     request: &RenderRequest,
     preview: bool,
+    override_camera: Option<&Camera>,
 ) -> Result<PreparedSlices, RenderError> {
     let o = &request.options;
-    let key = SliceKey::new(&request.structure, o);
+    let key = SliceKey::new(&request.structure, o, override_camera);
     let mut warnings = request
         .structure
         .warnings
@@ -518,75 +573,108 @@ pub(crate) fn prepare_slices(
         .cloned()
         .collect::<Vec<_>>();
 
-    if o.selected_chains.is_empty() {
-        warnings.push("No chains selected; the drawing is empty.".into());
+    if !o.has_selected_mode(RenderMode::Slice) {
+        if o.selected_chains.is_empty() {
+            warnings.push("No chains selected; the drawing is empty.".into());
+        }
         return Ok(PreparedSlices {
             key,
-            camera: Camera {
+            camera: override_camera.cloned().unwrap_or(Camera {
                 center: [0.0; 3],
                 basis: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-            },
-            loops: Vec::new(),
+            }),
+            groups: Vec::new(),
             radius: 1.0,
             residue_count: 0,
             warnings,
         });
     }
 
-    let (atoms, residue_count) = collect_atoms(&request.structure, o);
-    if atoms.is_empty() {
+    let (by_color, residue_count) = collect_atoms_by_color(&request.structure, o);
+    let all_positions: Vec<V3> = by_color
+        .values()
+        .flat_map(|atoms| atoms.iter().map(|&(p, _)| p))
+        .collect();
+    if all_positions.is_empty() {
         return fail("Selected components contain no atomic coordinates to slice");
     }
 
-    let positions: Vec<V3> = atoms.iter().map(|&(p, _)| p).collect();
-    let camera = Camera::new(&positions, [0.0; 3]);
-    let basis = section_basis(&camera, o);
-    let voxel_cap = if preview {
-        PREVIEW_MAX_VOXELS
-    } else {
-        MAX_VOXELS
+    let camera = match override_camera {
+        Some(cam) => cam.clone(),
+        None => Camera::new(&all_positions, [0.0; 3]),
     };
-    let field = build_field(
-        &atoms,
-        camera.center,
-        basis,
-        o.slice_coarseness,
-        o.slice_probe_angstrom,
-        voxel_cap,
-    );
-    if field.coarsened && !preview {
+    let basis = section_basis(&camera, o);
+    let group_count = by_color.len().max(1);
+    let voxel_cap = if preview {
+        (PREVIEW_MAX_VOXELS / group_count).max(150_000)
+    } else {
+        (MAX_VOXELS / group_count).max(600_000)
+    };
+
+    let c = o.slice_coarseness as f64 / 100.0;
+    let simplify_tol = 0.02 + 0.88 * c * c;
+    let mut coarsened_any = false;
+    let mut groups = Vec::with_capacity(by_color.len());
+    let mut max_r2 = 0.0f64;
+
+    let mut global_z_min = f64::INFINITY;
+    let mut global_z_max = f64::NEG_INFINITY;
+    let mut fields = Vec::with_capacity(by_color.len());
+    for (color, atoms) in by_color {
+        let field = build_field(
+            &atoms,
+            camera.center,
+            basis,
+            o.slice_coarseness,
+            o.slice_probe_angstrom,
+            voxel_cap,
+        );
+        coarsened_any |= field.coarsened;
+        global_z_min = global_z_min.min(field.z_min);
+        global_z_max = global_z_max.max(field.z_max);
+        fields.push((color, field));
+    }
+
+    if coarsened_any && !preview {
         warnings.push(
             "Envelope grid resolution was coarsened automatically to stay within local memory limits."
                 .into(),
         );
     }
 
-    let c = o.slice_coarseness as f64 / 100.0;
-    let simplify_tol = 0.02 + 0.88 * c * c;
-    let z_lo = field.z_min - o.slice_probe_angstrom;
-    let z_hi = field.z_max + o.slice_probe_angstrom;
-    let mut plane = vec![0.0f32; field.nx * field.ny];
-    let mut loops = Vec::new();
-    let mut max_r2 = 0.0f64;
+    let z_lo = global_z_min - o.slice_probe_angstrom;
+    let z_hi = global_z_max + o.slice_probe_angstrom;
 
-    for i in 0..o.slice_count {
-        let w = z_lo + (i as f64 + 0.5) * (z_hi - z_lo) / o.slice_count as f64;
-        plane_at(&field, w, &mut plane);
-        for raw_loop in marching_squares(&plane, field.nx, field.ny, field.ox, field.oy, field.h) {
-            let Some(simplified) = simplify_closed_loop(&raw_loop, simplify_tol) else {
+    for (color, field) in fields {
+        let mut plane = vec![0.0f32; field.nx * field.ny];
+        let mut loops = Vec::new();
+        for i in 0..o.slice_count {
+            let w = z_lo + (i as f64 + 0.5) * (z_hi - z_lo) / o.slice_count as f64;
+            if w < field.oz - field.h || w > field.oz + field.nz as f64 * field.h {
                 continue;
-            };
-            let mut loop_3d = Vec::with_capacity(simplified.len());
-            for [u, v] in simplified {
-                let rel = add(add(mul(basis[0], u), mul(basis[1], v)), mul(basis[2], w));
-                max_r2 = max_r2.max(dot(rel, rel));
-                loop_3d.push(add(camera.center, rel));
             }
-            loops.push(loop_3d);
+            plane_at(&field, w, &mut plane);
+            for raw_loop in
+                marching_squares(&plane, field.nx, field.ny, field.ox, field.oy, field.h)
+            {
+                let Some(simplified) = simplify_closed_loop(&raw_loop, simplify_tol) else {
+                    continue;
+                };
+                let mut loop_3d = Vec::with_capacity(simplified.len());
+                for [u, v] in simplified {
+                    let rel = add(add(mul(basis[0], u), mul(basis[1], v)), mul(basis[2], w));
+                    max_r2 = max_r2.max(dot(rel, rel));
+                    loop_3d.push(add(camera.center, rel));
+                }
+                loops.push(loop_3d);
+            }
+        }
+        if !loops.is_empty() {
+            groups.push(PreparedSliceGroup { color, loops });
         }
     }
 
-    if loops.is_empty() {
+    if groups.is_empty() {
         return fail(
             "Slicer envelope came out empty; reduce coarseness or increase envelope probe",
         );
@@ -595,7 +683,7 @@ pub(crate) fn prepare_slices(
     Ok(PreparedSlices {
         key,
         camera,
-        loops,
+        groups,
         radius: max_r2.sqrt().max(1.0),
         residue_count,
         warnings,
@@ -700,9 +788,14 @@ fn linear_runs(mask: &[bool]) -> Vec<(usize, usize)> {
 }
 
 #[derive(Clone)]
-struct WeightedPath {
-    points: Vec<P2>,
-    passes: usize,
+pub(crate) struct WeightedPath {
+    pub(crate) points: Vec<P2>,
+    pub(crate) passes: usize,
+}
+
+pub(crate) struct ProjectedSliceGroup {
+    pub(crate) color: String,
+    pub(crate) loops: Vec<(Vec<P2>, Vec<f64>)>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -791,46 +884,6 @@ fn order_weighted(items: Vec<WeightedPath>, allow_reverse: bool) -> Vec<Weighted
     ordered
 }
 
-fn fit_weighted_paths(
-    paths: &mut [WeightedPath],
-    options: &RenderOptions,
-) -> Result<(), RenderError> {
-    let mut low = [f64::INFINITY; 2];
-    let mut high = [f64::NEG_INFINITY; 2];
-    for item in paths.iter() {
-        for p in &item.points {
-            for axis in 0..2 {
-                if !p[axis].is_finite() {
-                    return fail("Nonfinite projected slice geometry");
-                }
-                low[axis] = low[axis].min(p[axis]);
-                high[axis] = high[axis].max(p[axis]);
-            }
-        }
-    }
-    let span = sub(high, low);
-    if !span.iter().all(|v| v.is_finite()) || span[0].max(span[1]) < 1e-8 {
-        return fail("Slice projection is degenerate; cannot fit artwork to the page");
-    }
-    let min_x = options.margin_mm + options.pen_width_mm * 0.5;
-    let max_x = options.width_mm - options.margin_mm - options.pen_width_mm * 0.5;
-    let min_y = options.margin_mm + options.pen_width_mm * 0.5;
-    let max_y = options.height_mm - options.margin_mm - options.pen_width_mm * 0.5;
-
-    // Only rescale/recenter if parallel offsets pushed outside the printable margin,
-    // or if base pre-fit left slack.
-    let avail = [max_x - min_x, max_y - min_y];
-    let scale = (avail[0] / span[0].max(1e-12)).min(avail[1] / span[1].max(1e-12));
-    let mid = mul(add(low, high), 0.5);
-    let page_mid = [options.width_mm * 0.5, options.height_mm * 0.5];
-    for item in paths.iter_mut() {
-        for p in &mut item.points {
-            *p = add(mul(sub(*p, mid), scale), page_mid);
-        }
-    }
-    Ok(())
-}
-
 fn emit_track_passes(
     track_pts: &[P2],
     track_u: &[f64],
@@ -911,91 +964,96 @@ fn emit_track_passes(
     }
 }
 
-pub(crate) fn render_from_prepared(
-    request: &RenderRequest,
+pub(crate) fn project_slice_groups(
     prepared: &PreparedSlices,
-    preview: bool,
-) -> Result<RenderResult, RenderError> {
-    let o = &request.options;
-    let mut warnings = prepared.warnings.clone();
-
-    if prepared.loops.is_empty() {
-        return make_slice_svg(request, Vec::new(), 0, warnings, preview);
-    }
-
-    let camera = prepared.camera.rotated(o.rotation);
+    rotated_camera: &Camera,
+    perspective: bool,
+) -> (Vec<ProjectedSliceGroup>, [P2; 2], [f64; 2]) {
     let inv_r = 1.0 / prepared.radius.max(1.0);
     let mut z_min = f64::INFINITY;
     let mut z_max = f64::NEG_INFINITY;
     let mut low = [f64::INFINITY; 2];
     let mut high = [f64::NEG_INFINITY; 2];
 
-    let projected: Vec<(Vec<P2>, Vec<f64>)> = prepared
-        .loops
+    let groups = prepared
+        .groups
         .iter()
-        .map(|loop_3d| {
-            let mut pts = Vec::with_capacity(loop_3d.len());
-            let mut zs = Vec::with_capacity(loop_3d.len());
-            for &world in loop_3d {
-                let c = camera.point(world);
-                z_min = z_min.min(c[2]);
-                z_max = z_max.max(c[2]);
-                let p = if o.slice_perspective {
-                    let nz = (c[2] * inv_r).clamp(-1.0, 1.0);
-                    let f = FOC / (FOC - nz);
-                    [c[0] * f, -c[1] * f]
-                } else {
-                    [c[0], -c[1]]
-                };
-                for axis in 0..2 {
-                    low[axis] = low[axis].min(p[axis]);
-                    high[axis] = high[axis].max(p[axis]);
-                }
-                pts.push(p);
-                zs.push(c[2]);
+        .map(|group| {
+            let loops = group
+                .loops
+                .iter()
+                .map(|loop_3d| {
+                    let mut pts = Vec::with_capacity(loop_3d.len());
+                    let mut zs = Vec::with_capacity(loop_3d.len());
+                    for &world in loop_3d {
+                        let c = rotated_camera.point(world);
+                        z_min = z_min.min(c[2]);
+                        z_max = z_max.max(c[2]);
+                        let p = if perspective {
+                            let nz = (c[2] * inv_r).clamp(-1.0, 1.0);
+                            let f = FOC / (FOC - nz);
+                            [c[0] * f, -c[1] * f]
+                        } else {
+                            [c[0], -c[1]]
+                        };
+                        for axis in 0..2 {
+                            low[axis] = low[axis].min(p[axis]);
+                            high[axis] = high[axis].max(p[axis]);
+                        }
+                        pts.push(p);
+                        zs.push(c[2]);
+                    }
+                    (pts, zs)
+                })
+                .collect();
+            ProjectedSliceGroup {
+                color: group.color.clone(),
+                loops,
             }
-            (pts, zs)
         })
         .collect();
 
-    let span = sub(high, low);
-    if !span.iter().all(|v| v.is_finite()) || span[0].max(span[1]) < 1e-8 {
-        return fail("Slice projection is degenerate; cannot fit artwork to the page");
-    }
+    (groups, [low, high], [z_min, z_max])
+}
 
-    let max_outward = (o.slice_max_parallel / 2) as f64 * o.slice_parallel_spacing_mm;
-    let avail = [
-        (o.width_mm - 2.0 * o.margin_mm - o.pen_width_mm - 2.0 * max_outward).max(o.pen_width_mm),
-        (o.height_mm - 2.0 * o.margin_mm - o.pen_width_mm - 2.0 * max_outward).max(o.pen_width_mm),
-    ];
-    let pre_scale = (avail[0] / span[0].max(1e-12)).min(avail[1] / span[1].max(1e-12));
-    let mid = mul(add(low, high), 0.5);
-    let page_mid = [o.width_mm * 0.5, o.height_mm * 0.5];
-
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_weighted_slice_groups(
+    projected_groups: Vec<ProjectedSliceGroup>,
+    z_range: [f64; 2],
+    mid: P2,
+    scale: f64,
+    page_mid: P2,
+    o: &RenderOptions,
+    preview: bool,
+    warnings: &mut Vec<String>,
+) -> Vec<(String, Vec<WeightedPath>)> {
     if preview {
         warnings.push(
             "Interaction preview: base slice contours only. Release to compute parallel depth tracks and overdraw passes."
                 .into(),
         );
-        let mut weighted: Vec<WeightedPath> = projected
+        return projected_groups
             .into_iter()
-            .filter_map(|(pts, _)| {
-                let mut closed: Vec<P2> = pts
+            .filter_map(|group| {
+                let weighted: Vec<WeightedPath> = group
+                    .loops
                     .into_iter()
-                    .map(|p| add(mul(sub(p, mid), pre_scale), page_mid))
+                    .filter_map(|(pts, _)| {
+                        let mut closed: Vec<P2> = pts
+                            .into_iter()
+                            .map(|p| add(mul(sub(p, mid), scale), page_mid))
+                            .collect();
+                        let first = *closed.first()?;
+                        closed.push(first);
+                        (path_length(&closed) >= MIN_LENGTH_MM).then_some(WeightedPath {
+                            points: closed,
+                            passes: 1,
+                        })
+                    })
                     .collect();
-                let first = *closed.first()?;
-                closed.push(first);
-                (path_length(&closed) >= MIN_LENGTH_MM).then_some(WeightedPath {
-                    points: closed,
-                    passes: 1,
-                })
+                (!weighted.is_empty()).then_some((group.color, weighted))
             })
             .collect();
-        if !weighted.is_empty() {
-            fit_weighted_paths(&mut weighted, o)?;
-        }
-        return make_slice_svg(request, weighted, prepared.residue_count, warnings, true);
     }
 
     if o.slice_max_parallel > 1 && o.pen_width_mm > o.slice_parallel_spacing_mm {
@@ -1005,160 +1063,196 @@ pub(crate) fn render_from_prepared(
         );
     }
 
-    let z_span = z_max - z_min;
-    let mut weighted = Vec::new();
+    let z_span = z_range[1] - z_range[0];
+    let allow_reverse = o.stroke_direction != StrokeDirection::Backbone;
+    let mut out = Vec::with_capacity(projected_groups.len());
 
-    for (raw_pts, zs) in projected {
-        let pts: Vec<P2> = raw_pts
-            .into_iter()
-            .map(|p| add(mul(sub(p, mid), pre_scale), page_mid))
-            .collect();
-        let n = pts.len();
-        if n < 3 {
-            continue;
-        }
-        let perim = closed_perimeter(&pts);
-        if perim < MIN_LENGTH_MM {
-            continue;
-        }
-        let area = signed_area(&pts);
-        let inradius = 2.0 * area.abs() / perim.max(1e-9);
-        let normals = outward_normals(&pts, area);
-
-        let mut u: Vec<f64> = zs
-            .into_iter()
-            .map(|z| {
-                let t = if z_span > 1e-9 {
-                    ((z - z_min) / z_span).clamp(0.0, 1.0)
-                } else {
-                    1.0
-                };
-                t.powf(o.slice_depth_gamma)
-            })
-            .collect();
-        for _ in 0..2 {
-            let prev = u.clone();
-            for i in 0..n {
-                u[i] = 0.25 * prev[(i + n - 1) % n] + 0.5 * prev[i] + 0.25 * prev[(i + 1) % n];
-            }
-        }
-
-        // Track 0: always-continuous base contour.
-        emit_track_passes(&pts, &u, true, o.slice_max_passes, &mut weighted);
-
-        // Flanking parallel tracks: -d (inward), +d (outward), -2d, +2d, ...
-        for track in 1..o.slice_max_parallel {
-            let pair = track.div_ceil(2);
-            let inward = track % 2 == 1;
-            let dist = pair as f64 * o.slice_parallel_spacing_mm;
-            if inward && (n <= 5 || dist >= 0.50 * inradius) {
+    for group in projected_groups {
+        let mut weighted = Vec::new();
+        for (raw_pts, zs) in group.loops {
+            let pts: Vec<P2> = raw_pts
+                .into_iter()
+                .map(|p| add(mul(sub(p, mid), scale), page_mid))
+                .collect();
+            let n = pts.len();
+            if n < 3 {
                 continue;
             }
-            let signed_offset = if inward { -dist } else { dist };
-            let threshold = track as f64 / o.slice_max_parallel as f64 - 1e-9;
-            let mask: Vec<bool> = u.iter().map(|&val| val >= threshold).collect();
-            let runs = cyclic_runs(&mask);
+            let perim = closed_perimeter(&pts);
+            if perim < MIN_LENGTH_MM {
+                continue;
+            }
+            let area = signed_area(&pts);
+            let inradius = 2.0 * area.abs() / perim.max(1e-9);
+            let normals = outward_normals(&pts, area);
 
-            if runs.len() == 1 && runs[0].1 == n {
-                let offset_pts: Vec<P2> = (0..n)
-                    .map(|i| add(pts[i], mul(normals[i], signed_offset)))
-                    .collect();
-                if inward && signed_area(&offset_pts) * area <= 0.0 {
+            let mut u: Vec<f64> = zs
+                .into_iter()
+                .map(|z| {
+                    let t = if z_span > 1e-9 {
+                        ((z - z_range[0]) / z_span).clamp(0.0, 1.0)
+                    } else {
+                        1.0
+                    };
+                    t.powf(o.slice_depth_gamma)
+                })
+                .collect();
+            for _ in 0..2 {
+                let prev = u.clone();
+                for i in 0..n {
+                    u[i] = 0.25 * prev[(i + n - 1) % n] + 0.5 * prev[i] + 0.25 * prev[(i + 1) % n];
+                }
+            }
+
+            emit_track_passes(&pts, &u, true, o.slice_max_passes, &mut weighted);
+
+            for track in 1..o.slice_max_parallel {
+                let pair = track.div_ceil(2);
+                let inward = track % 2 == 1;
+                let dist = pair as f64 * o.slice_parallel_spacing_mm;
+                if inward && (n <= 5 || dist >= 0.50 * inradius) {
                     continue;
                 }
-                emit_track_passes(&offset_pts, &u, true, o.slice_max_passes, &mut weighted);
-            } else {
-                let max_unassigned = runs
-                    .iter()
-                    .map(|(_, len)| n.saturating_sub(*len) / 2)
-                    .min()
-                    .unwrap_or(0);
-                let taper = 3.min(max_unassigned);
-                for (start, len) in runs {
-                    let total = len + 2 * taper;
-                    if total < 2 {
+                let signed_offset = if inward { -dist } else { dist };
+                let threshold = track as f64 / o.slice_max_parallel as f64 - 1e-9;
+                let mask: Vec<bool> = u.iter().map(|&val| val >= threshold).collect();
+                let runs = cyclic_runs(&mask);
+
+                if runs.len() == 1 && runs[0].1 == n {
+                    let offset_pts: Vec<P2> = (0..n)
+                        .map(|i| add(pts[i], mul(normals[i], signed_offset)))
+                        .collect();
+                    if inward && signed_area(&offset_pts) * area <= 0.0 {
                         continue;
                     }
-                    let begin = (start + n - taper) % n;
-                    let mut arc_pts = Vec::with_capacity(total);
-                    let mut arc_u = Vec::with_capacity(total);
-                    for k in 0..total {
-                        let idx = (begin + k) % n;
-                        let weight = if taper > 0 && k < taper {
-                            let f = (k + 1) as f64 / (taper + 1) as f64;
-                            0.5 - 0.5 * (std::f64::consts::PI * f).cos()
-                        } else if taper > 0 && k >= taper + len {
-                            let rem = total - k;
-                            let f = rem as f64 / (taper + 1) as f64;
-                            0.5 - 0.5 * (std::f64::consts::PI * f).cos()
-                        } else {
-                            1.0
-                        };
-                        arc_pts.push(add(pts[idx], mul(normals[idx], signed_offset * weight)));
-                        arc_u.push(u[idx]);
+                    emit_track_passes(&offset_pts, &u, true, o.slice_max_passes, &mut weighted);
+                } else {
+                    let max_unassigned = runs
+                        .iter()
+                        .map(|(_, len)| n.saturating_sub(*len) / 2)
+                        .min()
+                        .unwrap_or(0);
+                    let taper = 3.min(max_unassigned);
+                    for (start, len) in runs {
+                        let total = len + 2 * taper;
+                        if total < 2 {
+                            continue;
+                        }
+                        let begin = (start + n - taper) % n;
+                        let mut arc_pts = Vec::with_capacity(total);
+                        let mut arc_u = Vec::with_capacity(total);
+                        for k in 0..total {
+                            let idx = (begin + k) % n;
+                            let weight = if taper > 0 && k < taper {
+                                let f = (k + 1) as f64 / (taper + 1) as f64;
+                                0.5 - 0.5 * (std::f64::consts::PI * f).cos()
+                            } else if taper > 0 && k >= taper + len {
+                                let rem = total - k;
+                                let f = rem as f64 / (taper + 1) as f64;
+                                0.5 - 0.5 * (std::f64::consts::PI * f).cos()
+                            } else {
+                                1.0
+                            };
+                            arc_pts.push(add(pts[idx], mul(normals[idx], signed_offset * weight)));
+                            arc_u.push(u[idx]);
+                        }
+                        emit_track_passes(
+                            &arc_pts,
+                            &arc_u,
+                            false,
+                            o.slice_max_passes,
+                            &mut weighted,
+                        );
                     }
-                    emit_track_passes(&arc_pts, &arc_u, false, o.slice_max_passes, &mut weighted);
+                }
+            }
+        }
+        if !weighted.is_empty() {
+            out.push((group.color, order_weighted(weighted, allow_reverse)));
+        }
+    }
+    out
+}
+
+fn fit_weighted_groups(
+    groups: &mut [(String, Vec<WeightedPath>)],
+    options: &RenderOptions,
+) -> Result<(), RenderError> {
+    let mut low = [f64::INFINITY; 2];
+    let mut high = [f64::NEG_INFINITY; 2];
+    for (_, paths) in groups.iter() {
+        for item in paths {
+            for p in &item.points {
+                for axis in 0..2 {
+                    if !p[axis].is_finite() {
+                        return fail("Nonfinite projected slice geometry");
+                    }
+                    low[axis] = low[axis].min(p[axis]);
+                    high[axis] = high[axis].max(p[axis]);
                 }
             }
         }
     }
-
-    if weighted.is_empty() {
-        warnings.push("No slice strokes survived minimum stroke length filtering.".into());
-        return make_slice_svg(request, Vec::new(), prepared.residue_count, warnings, false);
+    let span = sub(high, low);
+    if !span.iter().all(|v| v.is_finite()) || span[0].max(span[1]) < 1e-8 {
+        return fail("Slice projection is degenerate; cannot fit artwork to the page");
     }
-
-    fit_weighted_paths(&mut weighted, o)?;
-    let ordered = order_weighted(weighted, o.stroke_direction != StrokeDirection::Backbone);
-    make_slice_svg(request, ordered, prepared.residue_count, warnings, false)
+    let min_x = options.margin_mm + options.pen_width_mm * 0.5;
+    let max_x = options.width_mm - options.margin_mm - options.pen_width_mm * 0.5;
+    let min_y = options.margin_mm + options.pen_width_mm * 0.5;
+    let max_y = options.height_mm - options.margin_mm - options.pen_width_mm * 0.5;
+    let avail = [max_x - min_x, max_y - min_y];
+    let scale = (avail[0] / span[0].max(1e-12)).min(avail[1] / span[1].max(1e-12));
+    let mid = mul(add(low, high), 0.5);
+    let page_mid = [options.width_mm * 0.5, options.height_mm * 0.5];
+    for (_, paths) in groups.iter_mut() {
+        for item in paths {
+            for p in &mut item.points {
+                *p = add(mul(sub(*p, mid), scale), page_mid);
+            }
+        }
+    }
+    Ok(())
 }
 
-fn make_slice_svg(
-    request: &RenderRequest,
-    weighted: Vec<WeightedPath>,
-    residue_count: usize,
-    warnings: Vec<String>,
-    preview: bool,
-) -> Result<RenderResult, RenderError> {
-    let o = &request.options;
+pub(crate) fn format_opacity(opacity: f64) -> String {
+    format!("{opacity:.3}")
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_owned()
+}
+
+pub(crate) fn slice_groups_stats(groups: &[(String, Vec<WeightedPath>)]) -> (usize, usize, f64) {
     let mut stroke_count = 0usize;
     let mut point_count = 0usize;
     let mut length_mm = 0.0f64;
-
-    for item in &weighted {
-        stroke_count = stroke_count.saturating_add(item.passes);
-        point_count = point_count.saturating_add(item.points.len().saturating_mul(item.passes));
-        length_mm += path_length(&item.points) * item.passes as f64;
+    for (_, paths) in groups {
+        for item in paths {
+            stroke_count = stroke_count.saturating_add(item.passes);
+            point_count = point_count.saturating_add(item.points.len().saturating_mul(item.passes));
+            length_mm += path_length(&item.points) * item.passes as f64;
+        }
     }
-    if point_count > MAX_PIECES {
-        return fail("SVG exceeds 2000000 output points; reduce slice count, parallel lines, or overdraw passes");
-    }
+    (stroke_count, point_count, length_mm)
+}
 
-    let desc = if preview {
-        "Approximate slice interaction preview. Parallel tracks and overdraw passes are omitted until release."
-    } else {
-        "Sliced molecular surface contours for pen plotting. Depth encoded by parallel tracks and multi-pass overdraw; stroke-opacity simulates ink buildup. No filled surfaces, masks, fonts, or raster data."
-    };
-    let opacity = format!("{:.3}", o.slice_ink_opacity)
-        .trim_end_matches('0')
-        .trim_end_matches('.')
-        .to_owned();
-
-    let mut svg = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}mm\" height=\"{}mm\" viewBox=\"0 0 {} {}\">\n<title>{} / slice plot</title>\n<desc>{}</desc>\n<g fill=\"none\" stroke=\"black\" stroke-opacity=\"{}\" stroke-width=\"{}\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n",
-        o.width_mm,
-        o.height_mm,
-        o.width_mm,
-        o.height_mm,
-        crate::xml(&request.structure.name),
-        desc,
-        opacity,
-        o.pen_width_mm,
-    );
-
-    if !weighted.is_empty() {
-        svg.push_str("<g id=\"pen-1\" stroke=\"black\">\n");
-        for item in &weighted {
+pub(crate) fn append_slice_groups_svg(
+    svg: &mut String,
+    groups: &[(String, Vec<WeightedPath>)],
+    opacity: &str,
+) {
+    for (idx, (color, weighted)) in groups.iter().enumerate() {
+        if weighted.is_empty() {
+            continue;
+        }
+        let _ = writeln!(
+            svg,
+            "<g id=\"slice-{}\" stroke=\"{}\" stroke-opacity=\"{}\">",
+            idx + 1,
+            color,
+            opacity
+        );
+        for item in weighted {
             let Some(&first) = item.points.first() else {
                 continue;
             };
@@ -1182,6 +1276,124 @@ fn make_slice_svg(
         }
         svg.push_str("</g>\n");
     }
+}
+
+pub(crate) fn sample_preview_groups(
+    groups: &[PreparedSliceGroup],
+    budget: usize,
+) -> Vec<PreparedSliceGroup> {
+    let total_pts: usize = groups.iter().flat_map(|g| &g.loops).map(Vec::len).sum();
+    let stride = total_pts.div_ceil(budget).max(1);
+    groups
+        .iter()
+        .filter_map(|group| {
+            let loops: Vec<Vec<V3>> = group
+                .loops
+                .iter()
+                .filter_map(|loop_pts| {
+                    if stride == 1 || loop_pts.len() <= 6 {
+                        return Some(loop_pts.clone());
+                    }
+                    let sampled: Vec<V3> = loop_pts.iter().step_by(stride).copied().collect();
+                    (sampled.len() >= 3).then_some(sampled)
+                })
+                .collect();
+            (!loops.is_empty()).then_some(PreparedSliceGroup {
+                color: group.color.clone(),
+                loops,
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn render_from_prepared(
+    request: &RenderRequest,
+    prepared: &PreparedSlices,
+    preview: bool,
+) -> Result<RenderResult, RenderError> {
+    let o = &request.options;
+    let mut warnings = prepared.warnings.clone();
+
+    if prepared.groups.is_empty() {
+        return make_slice_svg(request, Vec::new(), 0, warnings, preview);
+    }
+
+    let camera = prepared.camera.rotated(o.rotation);
+    let (projected, [low, high], z_range) =
+        project_slice_groups(prepared, &camera, o.slice_perspective);
+
+    let span = sub(high, low);
+    if !span.iter().all(|v| v.is_finite()) || span[0].max(span[1]) < 1e-8 {
+        return fail("Slice projection is degenerate; cannot fit artwork to the page");
+    }
+
+    let max_outward = 1.45 * (o.slice_max_parallel / 2) as f64 * o.slice_parallel_spacing_mm;
+    let avail = [
+        (o.width_mm - 2.0 * o.margin_mm - o.pen_width_mm - 2.0 * max_outward).max(o.pen_width_mm),
+        (o.height_mm - 2.0 * o.margin_mm - o.pen_width_mm - 2.0 * max_outward).max(o.pen_width_mm),
+    ];
+    let pre_scale = (avail[0] / span[0].max(1e-12)).min(avail[1] / span[1].max(1e-12));
+    let mid = mul(add(low, high), 0.5);
+    let page_mid = [o.width_mm * 0.5, o.height_mm * 0.5];
+
+    let mut groups = build_weighted_slice_groups(
+        projected,
+        z_range,
+        mid,
+        pre_scale,
+        page_mid,
+        o,
+        preview,
+        &mut warnings,
+    );
+
+    if groups.is_empty() {
+        warnings.push("No slice strokes survived minimum stroke length filtering.".into());
+        return make_slice_svg(
+            request,
+            Vec::new(),
+            prepared.residue_count,
+            warnings,
+            preview,
+        );
+    }
+
+    fit_weighted_groups(&mut groups, o)?;
+    make_slice_svg(request, groups, prepared.residue_count, warnings, preview)
+}
+
+fn make_slice_svg(
+    request: &RenderRequest,
+    groups: Vec<(String, Vec<WeightedPath>)>,
+    residue_count: usize,
+    warnings: Vec<String>,
+    preview: bool,
+) -> Result<RenderResult, RenderError> {
+    let o = &request.options;
+    let (stroke_count, point_count, length_mm) = slice_groups_stats(&groups);
+    if point_count > MAX_PIECES {
+        return fail("SVG exceeds 2000000 output points; reduce slice count, parallel lines, or overdraw passes");
+    }
+
+    let desc = if preview {
+        "Approximate slice interaction preview. Parallel tracks and overdraw passes are omitted until release."
+    } else {
+        "Sliced molecular surface contours for pen plotting. Depth encoded by parallel tracks and multi-pass overdraw; stroke-opacity simulates ink buildup. No filled surfaces, masks, fonts, or raster data."
+    };
+    let opacity = format_opacity(o.slice_ink_opacity);
+
+    let mut svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}mm\" height=\"{}mm\" viewBox=\"0 0 {} {}\">\n<title>{} / slice plot</title>\n<desc>{}</desc>\n<g fill=\"none\" stroke=\"black\" stroke-width=\"{}\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n",
+        o.width_mm,
+        o.height_mm,
+        o.width_mm,
+        o.height_mm,
+        crate::xml(&request.structure.name),
+        desc,
+        o.pen_width_mm,
+    );
+
+    append_slice_groups_svg(&mut svg, &groups, &opacity);
 
     svg.push_str("</g>\n</svg>\n");
     if svg.len() > 64 * 1024 * 1024 {

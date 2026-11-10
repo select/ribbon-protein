@@ -42,17 +42,37 @@ pub fn render_json_native(request: &str) -> Result<String, RenderError> {
 /// retains prepared geometry and the last view's per-segment joined paths.
 pub fn render(request: &RenderRequest) -> Result<RenderResult, RenderError> {
     request.validate()?;
-    if request.options.render_mode == RenderMode::Slice {
-        let prepared = slicer::prepare_slices(request, false)?;
+    let has_slice = request.options.has_selected_mode(RenderMode::Slice);
+    let has_ribbon = request.options.has_selected_mode(RenderMode::Ribbon);
+    if has_slice && !has_ribbon {
+        let prepared = slicer::prepare_slices(request, false, None)?;
+        return slicer::render_from_prepared(request, &prepared, false);
+    }
+    if !has_slice
+        && request.options.selected_chains.is_empty()
+        && request.options.render_mode == RenderMode::Slice
+    {
+        let prepared = slicer::prepare_slices(request, false, None)?;
         return slicer::render_from_prepared(request, &prepared, false);
     }
     let prepared = prepare(request);
+    if has_slice {
+        let slice_prepared = slicer::prepare_slices(request, false, Some(&prepared.camera))?;
+        return render_hybrid(request, &prepared, &slice_prepared, false).map(|(r, _)| r);
+    }
     let (joined, _) = draw(request, &prepared, false)?;
     finish(request, &joined)
 }
 
-struct Prepared {
+#[derive(Clone, Debug, PartialEq)]
+struct PreparedKey {
     samples: usize,
+    ribbon_indices: Vec<usize>,
+    slice_chains: Vec<String>,
+}
+
+struct Prepared {
+    key: PreparedKey,
     indices: Vec<usize>,
     ribbons: Vec<Vec<ribbon::Sample>>,
     camera: math::Camera,
@@ -78,19 +98,44 @@ fn component_id(structure: &StructureData, index: usize) -> &str {
         &structure.molecules[index - structure.segments.len()].chain_id
     }
 }
-fn selected_indices(request: &RenderRequest) -> Vec<usize> {
+fn selected_ribbon_indices(request: &RenderRequest) -> Vec<usize> {
     let selected: HashSet<&str> = request
         .options
         .selected_chains
         .iter()
+        .filter(|id| request.options.mode_of(id) == RenderMode::Ribbon)
         .map(String::as_str)
         .collect();
     (0..request.structure.segments.len() + request.structure.molecules.len())
         .filter(|&i| selected.contains(component_id(&request.structure, i)))
         .collect()
 }
+fn selected_slice_chains(request: &RenderRequest) -> Vec<String> {
+    let wanted: HashSet<&str> = request
+        .options
+        .selected_chains
+        .iter()
+        .filter(|id| request.options.mode_of(id) == RenderMode::Slice)
+        .map(String::as_str)
+        .collect();
+    request
+        .structure
+        .chains
+        .iter()
+        .filter(|c| wanted.contains(c.id.as_str()))
+        .map(|c| c.id.clone())
+        .collect()
+}
+fn prepared_key(request: &RenderRequest) -> PreparedKey {
+    PreparedKey {
+        samples: request.options.samples,
+        ribbon_indices: selected_ribbon_indices(request),
+        slice_chains: selected_slice_chains(request),
+    }
+}
 fn prepare(request: &RenderRequest) -> Prepared {
-    let indices = selected_indices(request);
+    let key = prepared_key(request);
+    let indices = key.ribbon_indices.clone();
     let mut warnings = request.structure.warnings.clone();
     let mut fallback_used = false;
     let mut residue_count = 0;
@@ -114,6 +159,12 @@ fn prepare(request: &RenderRequest) -> Prepared {
                 .extend(&request.structure.molecules[i - request.structure.segments.len()].atoms);
         }
     }
+    if !key.slice_chains.is_empty() {
+        let (by_color, _) = slicer::collect_atoms_by_color(&request.structure, &request.options);
+        for atoms in by_color.values() {
+            all_points.extend(atoms.iter().map(|&(p, _)| p));
+        }
+    }
     let camera = if all_points.is_empty() {
         math::Camera {
             center: [0.0; 3],
@@ -123,7 +174,7 @@ fn prepare(request: &RenderRequest) -> Prepared {
         math::Camera::new(&all_points, [0.0; 3])
     };
     Prepared {
-        samples: request.options.samples,
+        key,
         indices,
         ribbons,
         camera,
@@ -162,11 +213,14 @@ fn now() -> f64 {
     }
 }
 
-fn draw(
+type PageFit = (math::P2, f64, math::P2);
+
+fn draw_with_bounds(
     request: &RenderRequest,
     prepared: &Prepared,
     preview: bool,
-) -> Result<(Joined, StageTimings), RenderError> {
+    extra_bounds: Option<([math::P2; 2], f64)>,
+) -> Result<(Joined, StageTimings, Option<PageFit>), RenderError> {
     let o = &request.options;
     let mut timings = StageTimings::default();
     let mut warnings = prepared.warnings.clone();
@@ -184,6 +238,7 @@ fn draw(
                 ..empty()
             },
             timings,
+            None,
         ));
     }
     if prepared.indices.is_empty() {
@@ -193,8 +248,6 @@ fn draw(
     }
     let started = now();
     let camera = prepared.camera.rotated(o.rotation);
-    // Preview keeps the exact full-sample PCA convention, but projects a bounded
-    // subset of the actual 3D ribbon. It never enters clipping or path ordering.
     let stride = if preview {
         prepared
             .ribbons
@@ -248,7 +301,10 @@ fn draw(
             sections.push(path.sections);
         }
     }
-    fit_page(&mut sections, o, o.max_pen_width(&request.structure))?;
+    let stroke_pad = extra_bounds
+        .map(|(_, pad)| o.max_pen_width(&request.structure).max(pad))
+        .unwrap_or_else(|| o.max_pen_width(&request.structure));
+    let fit_transform = fit_page(&mut sections, o, stroke_pad, extra_bounds.map(|(b, _)| b))?;
     timings.project_ms = now() - started;
     if preview {
         warnings.push("Interaction preview: ribbon outlines and molecular bonds, without hidden-line removal. Refine before exporting.".into());
@@ -275,6 +331,7 @@ fn draw(
                 warnings,
             },
             timings,
+            Some(fit_transform),
         ));
     }
     let tracks = ribbon::track_count(&sections, o, &molecular_lines)?;
@@ -335,9 +392,6 @@ fn draw(
     let started = now();
     let mut budget = paths::Budget::default();
     let directed = o.stroke_direction == StrokeDirection::Backbone;
-    // A molecule's strips, cap arcs and branch joins are separate clipping
-    // primitives, but one joining domain. Never join separate components or
-    // protein backbone fragments merely because their colors coincide.
     let mut joined_indices = Vec::new();
     let mut groups: Vec<Vec<clip::Edge>> = Vec::new();
     for (index, edges) in section_indices.into_iter().zip(visible) {
@@ -361,13 +415,21 @@ fn draw(
             warnings,
         },
         timings,
+        Some(fit_transform),
     ))
 }
+
+fn draw(
+    request: &RenderRequest,
+    prepared: &Prepared,
+    preview: bool,
+) -> Result<(Joined, StageTimings), RenderError> {
+    draw_with_bounds(request, prepared, preview, None).map(|(j, t, _)| (j, t))
+}
+
 fn finish(request: &RenderRequest, joined: &Joined) -> Result<RenderResult, RenderError> {
     let o = &request.options;
     let mut colors: BTreeMap<(String, bool), Vec<paths::Path>> = BTreeMap::new();
-    // Joining remains per segment, NOT per color. Rebuild color groups and
-    // rerun ordering: a color change can merge/split groups and change travel.
     for (&index, paths) in joined.indices.iter().zip(&joined.paths) {
         let color = o
             .chain_colors
@@ -394,6 +456,131 @@ fn finish(request: &RenderRequest, joined: &Joined) -> Result<RenderResult, Rend
     make_result(request, colors, joined.residue_count, warnings)
 }
 
+fn render_hybrid(
+    request: &RenderRequest,
+    prepared: &Prepared,
+    slice_prepared: &slicer::PreparedSlices,
+    preview: bool,
+) -> Result<(RenderResult, StageTimings), RenderError> {
+    let o = &request.options;
+    let rotated = prepared.camera.rotated(o.rotation);
+    let (projected_slices, slice_bounds, z_range) =
+        slicer::project_slice_groups(slice_prepared, &rotated, false);
+    let max_outward = 1.45 * (o.slice_max_parallel / 2) as f64 * o.slice_parallel_spacing_mm;
+    let slice_pad = o.pen_width_mm + 2.0 * max_outward;
+
+    let (joined, mut timings, fit_opt) =
+        draw_with_bounds(request, prepared, preview, Some((slice_bounds, slice_pad)))?;
+    let finish_started = now();
+    let (mid, scale, page_mid) =
+        fit_opt.unwrap_or(([0.0, 0.0], 1.0, [o.width_mm * 0.5, o.height_mm * 0.5]));
+    let mut warnings = joined.warnings.clone();
+    for w in &slice_prepared.warnings {
+        if !warnings.contains(w) {
+            warnings.push(w.clone());
+        }
+    }
+    let slice_groups = slicer::build_weighted_slice_groups(
+        projected_slices,
+        z_range,
+        mid,
+        scale,
+        page_mid,
+        o,
+        preview,
+        &mut warnings,
+    );
+
+    let mut colors: BTreeMap<(String, bool), Vec<paths::Path>> = BTreeMap::new();
+    for (&index, paths) in joined.indices.iter().zip(&joined.paths) {
+        let color = o
+            .chain_colors
+            .get(component_id(&request.structure, index))
+            .map(String::as_str)
+            .unwrap_or("black");
+        colors
+            .entry((color.to_owned(), is_lipid(&request.structure, index)))
+            .or_default()
+            .extend(paths.iter().cloned());
+    }
+    if !preview {
+        for paths in colors.values_mut() {
+            *paths = paths::order(
+                std::mem::take(paths),
+                o.stroke_direction != StrokeDirection::Backbone,
+            );
+        }
+    }
+
+    let (slice_strokes, slice_points, slice_len) = slicer::slice_groups_stats(&slice_groups);
+    let ribbon_strokes: usize = colors.values().map(Vec::len).sum();
+    let ribbon_points: usize = colors.values().flatten().map(Vec::len).sum();
+    let ribbon_len: f64 = colors.values().flatten().map(|p| paths::length(p)).sum();
+
+    if slice_points.saturating_add(ribbon_points) > model::MAX_PIECES {
+        return model::fail("SVG exceeds 2000000 output points; reduce drawing complexity");
+    }
+
+    let opacity = slicer::format_opacity(o.slice_ink_opacity);
+    let desc = if preview {
+        "Approximate hybrid interaction preview. Hidden strokes and slice depth tracks are omitted until release."
+    } else {
+        "Hybrid ribbon and sliced-surface pen plot. Slice groups use stroke-opacity to simulate overdraw buildup; ribbon strokes are opaque centerlines."
+    };
+    let mut svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}mm\" height=\"{}mm\" viewBox=\"0 0 {} {}\">\n<title>{} / hybrid plot</title>\n<desc>{}</desc>\n<g fill=\"none\" stroke=\"black\" stroke-width=\"{}\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n",
+        o.width_mm,
+        o.height_mm,
+        o.width_mm,
+        o.height_mm,
+        xml(&request.structure.name),
+        desc,
+        o.pen_width_mm,
+    );
+    slicer::append_slice_groups_svg(&mut svg, &slice_groups, &opacity);
+    for (i, ((color, lipid), paths)) in colors.iter().enumerate() {
+        if *lipid {
+            let _ = writeln!(
+                svg,
+                "<g id=\"pen-{}\" stroke=\"{}\" stroke-width=\"{}\">",
+                i + 1,
+                color,
+                o.lipid_width_mm
+            );
+        } else {
+            let _ = writeln!(svg, "<g id=\"pen-{}\" stroke=\"{}\">", i + 1, color);
+        }
+        for path in paths {
+            if let Some(first) = path.first() {
+                let _ = write!(svg, "<path d=\"M{:.4},{:.4}", first[0], first[1]);
+                for point in &path[1..] {
+                    let _ = write!(svg, "L{:.4},{:.4}", point[0], point[1]);
+                }
+                svg.push_str("\"/>\n");
+            }
+        }
+        svg.push_str("</g>\n");
+    }
+    svg.push_str("</g>\n</svg>\n");
+    if svg.len() > 64 * 1024 * 1024 {
+        return model::fail("SVG exceeds 64 MiB");
+    }
+    timings.finish_ms = now() - finish_started;
+    Ok((
+        RenderResult {
+            svg,
+            width_mm: o.width_mm,
+            height_mm: o.height_mm,
+            stroke_count: slice_strokes + ribbon_strokes,
+            length_mm: slice_len + ribbon_len,
+            residue_count: prepared.residue_count + slice_prepared.residue_count,
+            elapsed_ms: 0.0,
+            warnings,
+        },
+        timings,
+    ))
+}
+
 /// Owns exactly one structure. Replacement drops every structure-dependent cache.
 /// At most two prepared sample/selection variants and one joined view are kept.
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
@@ -417,6 +604,20 @@ impl RenderSession {
             joined: None,
         })
     }
+    fn ensure_prepared(&mut self) -> bool {
+        let pkey = prepared_key(&self.request);
+        if let Some(index) = self.prepared.iter().position(|p| p.key == pkey) {
+            let entry = self.prepared.remove(index).unwrap();
+            self.prepared.push_front(entry);
+            true
+        } else {
+            if self.prepared.len() == 2 {
+                self.prepared.pop_back();
+            }
+            self.prepared.push_front(prepare(&self.request));
+            false
+        }
+    }
     pub fn calculate(
         &mut self,
         options: RenderOptions,
@@ -424,13 +625,20 @@ impl RenderSession {
     ) -> Result<(RenderResult, StageTimings), RenderError> {
         self.request.options = options;
         self.request.validate()?;
-        if self.request.options.render_mode == RenderMode::Slice {
-            let slice_key = slicer::SliceKey::new(&self.request.structure, &self.request.options);
+        let has_slice = self.request.options.has_selected_mode(RenderMode::Slice);
+        let has_ribbon = self.request.options.has_selected_mode(RenderMode::Ribbon);
+        let pure_slice = (has_slice && !has_ribbon)
+            || (!has_slice
+                && self.request.options.selected_chains.is_empty()
+                && self.request.options.render_mode == RenderMode::Slice);
+
+        if pure_slice {
+            let slice_key =
+                slicer::SliceKey::new(&self.request.structure, &self.request.options, None);
             let started = now();
             let index = self.slice_prepared.iter().position(|p| p.key == slice_key);
             if preview && index.is_none() {
-                // Never insert preview-coarsened voxel contours into exact cache.
-                let temp = slicer::prepare_slices(&self.request, true)?;
+                let temp = slicer::prepare_slices(&self.request, true, None)?;
                 let prepare_ms = now() - started;
                 let finish_started = now();
                 let result = slicer::render_from_prepared(&self.request, &temp, true)?;
@@ -452,7 +660,7 @@ impl RenderSession {
                     self.slice_prepared.pop_back();
                 }
                 self.slice_prepared
-                    .push_front(slicer::prepare_slices(&self.request, false)?);
+                    .push_front(slicer::prepare_slices(&self.request, false, None)?);
             }
             let prepare_ms = now() - started;
             let finish_started = now();
@@ -468,9 +676,50 @@ impl RenderSession {
                 },
             ));
         }
+
+        if has_slice && has_ribbon {
+            let started = now();
+            let rib_hit = self.ensure_prepared();
+            let cam = self.prepared[0].camera.clone();
+            let slice_key =
+                slicer::SliceKey::new(&self.request.structure, &self.request.options, Some(&cam));
+            let slc_idx = self.slice_prepared.iter().position(|p| p.key == slice_key);
+            if preview && slc_idx.is_none() {
+                let temp = slicer::prepare_slices(&self.request, true, Some(&cam))?;
+                let prepare_ms = now() - started;
+                let (result, mut timings) =
+                    render_hybrid(&self.request, &self.prepared[0], &temp, true)?;
+                timings.prepare_ms = prepare_ms;
+                return Ok((result, timings));
+            }
+            let slc_hit = slc_idx.is_some();
+            if let Some(index) = slc_idx {
+                let entry = self.slice_prepared.remove(index).unwrap();
+                self.slice_prepared.push_front(entry);
+            } else {
+                if self.slice_prepared.len() == 2 {
+                    self.slice_prepared.pop_back();
+                }
+                self.slice_prepared.push_front(slicer::prepare_slices(
+                    &self.request,
+                    false,
+                    Some(&cam),
+                )?);
+            }
+            let prepare_ms = now() - started;
+            let (result, mut timings) = render_hybrid(
+                &self.request,
+                &self.prepared[0],
+                &self.slice_prepared[0],
+                preview,
+            )?;
+            timings.prepare_ms = prepare_ms;
+            timings.geometry_cache_hit = rib_hit && slc_hit;
+            return Ok((result, timings));
+        }
+
         let mut key = self.request.options.clone();
         key.chain_colors.clear();
-        // The joined cache is independent only of colors; pen width affects fit.
         let hit = !preview && self.joined.as_ref().is_some_and(|(k, _)| *k == key);
         let mut timings = StageTimings {
             path_cache_hit: hit,
@@ -478,21 +727,7 @@ impl RenderSession {
         };
         if !hit {
             let started = now();
-            let indices = selected_indices(&self.request);
-            let index = self
-                .prepared
-                .iter()
-                .position(|p| p.samples == key.samples && p.indices == indices);
-            let geometry_hit = index.is_some();
-            if let Some(index) = index {
-                let prepared = self.prepared.remove(index).unwrap();
-                self.prepared.push_front(prepared);
-            } else {
-                if self.prepared.len() == 2 {
-                    self.prepared.pop_back();
-                }
-                self.prepared.push_front(prepare(&self.request));
-            }
+            let geometry_hit = self.ensure_prepared();
             let prepare_ms = now() - started;
             let (joined, stages) = draw(&self.request, &self.prepared[0], preview)?;
             timings = StageTimings {
@@ -502,7 +737,6 @@ impl RenderSession {
             };
             if preview {
                 let started = now();
-                // No plotter ordering in interaction preview.
                 let mut colors = BTreeMap::new();
                 for (&index, paths) in joined.indices.iter().zip(&joined.paths) {
                     let color = self
@@ -545,12 +779,20 @@ impl RenderSession {
             serde_json::from_str(structure).map_err(|e| format!("Invalid structure JSON: {e}"))?;
         Self::new(structure).map_err(|e| e.to_string())
     }
-    /// Small actual 3D ribbon scene for responsive main-thread interaction while
+    /// Small actual 3D ribbon/slice scene for responsive main-thread interaction while
     /// synchronous full-quality WASM is busy. Full-sample PCA is retained.
     pub fn preview_scene_json(&mut self) -> Result<String, String> {
         self.request.validate().map_err(|e| e.to_string())?;
-        if self.request.options.render_mode == RenderMode::Slice {
-            let slice_key = slicer::SliceKey::new(&self.request.structure, &self.request.options);
+        let has_slice = self.request.options.has_selected_mode(RenderMode::Slice);
+        let has_ribbon = self.request.options.has_selected_mode(RenderMode::Ribbon);
+        let pure_slice = (has_slice && !has_ribbon)
+            || (!has_slice
+                && self.request.options.selected_chains.is_empty()
+                && self.request.options.render_mode == RenderMode::Slice);
+
+        if pure_slice {
+            let slice_key =
+                slicer::SliceKey::new(&self.request.structure, &self.request.options, None);
             let index =
                 if let Some(index) = self.slice_prepared.iter().position(|p| p.key == slice_key) {
                     index
@@ -558,25 +800,13 @@ impl RenderSession {
                     if self.slice_prepared.len() == 2 {
                         self.slice_prepared.pop_back();
                     }
-                    let prepared =
-                        slicer::prepare_slices(&self.request, false).map_err(|e| e.to_string())?;
+                    let prepared = slicer::prepare_slices(&self.request, false, None)
+                        .map_err(|e| e.to_string())?;
                     self.slice_prepared.push_front(prepared);
                     0
                 };
             let prepared = &self.slice_prepared[index];
-            let total_pts: usize = prepared.loops.iter().map(Vec::len).sum();
-            let stride = total_pts.div_ceil(3200).max(1);
-            let slices: Vec<Vec<math::V3>> = prepared
-                .loops
-                .iter()
-                .filter_map(|loop_pts| {
-                    if stride == 1 || loop_pts.len() <= 6 {
-                        return Some(loop_pts.clone());
-                    }
-                    let sampled: Vec<math::V3> = loop_pts.iter().step_by(stride).copied().collect();
-                    (sampled.len() >= 3).then_some(sampled)
-                })
-                .collect();
+            let slice_groups = slicer::sample_preview_groups(&prepared.groups, 3200);
             #[derive(serde::Serialize)]
             #[serde(rename_all = "camelCase")]
             struct SliceScene {
@@ -584,7 +814,7 @@ impl RenderSession {
                 basis: [math::V3; 3],
                 ribbons: [(); 0],
                 molecules: [(); 0],
-                slices: Vec<Vec<math::V3>>,
+                slice_groups: Vec<slicer::PreparedSliceGroup>,
                 slice_radius: f64,
             }
             return serde_json::to_string(&SliceScene {
@@ -592,26 +822,36 @@ impl RenderSession {
                 basis: prepared.camera.basis,
                 ribbons: [],
                 molecules: [],
-                slices,
+                slice_groups,
                 slice_radius: prepared.radius,
             })
             .map_err(|e| e.to_string());
         }
-        let indices = selected_indices(&self.request);
-        let index = self
-            .prepared
-            .iter()
-            .position(|p| p.samples == self.request.options.samples && p.indices == indices);
-        let index = if let Some(index) = index {
-            index
-        } else {
-            if self.prepared.len() == 2 {
-                self.prepared.pop_back();
-            }
-            self.prepared.push_front(prepare(&self.request));
-            0
-        };
-        let prepared = &self.prepared[index];
+
+        self.ensure_prepared();
+        let mut slice_groups = Vec::new();
+        let mut slice_radius = None;
+        if has_slice {
+            let cam = self.prepared[0].camera.clone();
+            let slice_key =
+                slicer::SliceKey::new(&self.request.structure, &self.request.options, Some(&cam));
+            let index =
+                if let Some(index) = self.slice_prepared.iter().position(|p| p.key == slice_key) {
+                    index
+                } else {
+                    if self.slice_prepared.len() == 2 {
+                        self.slice_prepared.pop_back();
+                    }
+                    let prepared = slicer::prepare_slices(&self.request, false, Some(&cam))
+                        .map_err(|e| e.to_string())?;
+                    self.slice_prepared.push_front(prepared);
+                    0
+                };
+            slice_groups = slicer::sample_preview_groups(&self.slice_prepared[index].groups, 2400);
+            slice_radius = Some(self.slice_prepared[index].radius);
+        }
+
+        let prepared = &self.prepared[0];
         #[derive(serde::Serialize)]
         #[serde(rename_all = "camelCase")]
         struct SceneRibbon<'a> {
@@ -619,11 +859,16 @@ impl RenderSession {
             samples: Vec<&'a ribbon::Sample>,
         }
         #[derive(serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
         struct Scene<'a> {
             center: math::V3,
             basis: [math::V3; 3],
             ribbons: Vec<SceneRibbon<'a>>,
             molecules: Vec<molecule::PreviewMolecule>,
+            #[serde(skip_serializing_if = "Vec::is_empty")]
+            slice_groups: Vec<slicer::PreparedSliceGroup>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            slice_radius: Option<f64>,
         }
         let stride = prepared
             .ribbons
@@ -663,6 +908,8 @@ impl RenderSession {
                     })
                     .collect::<Vec<_>>(),
             ),
+            slice_groups,
+            slice_radius,
         })
         .map_err(|e| e.to_string())
     }
@@ -691,9 +938,16 @@ fn fit_page(
     sections: &mut [Vec<ribbon::Section>],
     o: &RenderOptions,
     stroke_width: f64,
-) -> Result<(), RenderError> {
+    extra_bounds: Option<[math::P2; 2]>,
+) -> Result<(math::P2, f64, math::P2), RenderError> {
     let mut low = [f64::INFINITY; 2];
     let mut high = [f64::NEG_INFINITY; 2];
+    if let Some([elo, ehi]) = extra_bounds {
+        for i in 0..2 {
+            low[i] = low[i].min(elo[i]);
+            high[i] = high[i].max(ehi[i]);
+        }
+    }
     for section in sections.iter().flatten() {
         for p in [section.left, section.right] {
             for i in 0..2 {
@@ -710,8 +964,8 @@ fn fit_page(
         return model::fail("Backbone projection is degenerate; cannot fit artwork to the page");
     }
     let available = [
-        o.width_mm - 2.0 * o.margin_mm - stroke_width,
-        o.height_mm - 2.0 * o.margin_mm - stroke_width,
+        (o.width_mm - 2.0 * o.margin_mm - stroke_width).max(o.pen_width_mm),
+        (o.height_mm - 2.0 * o.margin_mm - stroke_width).max(o.pen_width_mm),
     ];
     let scale = (available[0] / span[0].max(1e-12)).min(available[1] / span[1].max(1e-12));
     let middle = math::mul(math::add(low, high), 0.5);
@@ -726,7 +980,7 @@ fn fit_page(
             page_middle,
         );
     }
-    Ok(())
+    Ok((middle, scale, page_middle))
 }
 
 pub(crate) fn xml(text: &str) -> String {

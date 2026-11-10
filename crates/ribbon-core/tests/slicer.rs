@@ -254,7 +254,7 @@ fn slice_session_cache_matches_stateless_and_preview_never_poisons_exact_slices(
     }
 
     let scene: Value = serde_json::from_str(&session.preview_scene_json().unwrap()).unwrap();
-    assert!(scene["slices"].as_array().unwrap().len() > 4);
+    assert!(scene["sliceGroups"][0]["loops"].as_array().unwrap().len() > 4);
     assert!(scene["sliceRadius"].as_f64().unwrap() > 1.0);
 
     // Empty selection produces an empty slice sheet without error.
@@ -287,10 +287,64 @@ fn invalid_slicer_options_and_atom_radii_fail_cleanly() {
         Box::new(|r| r.structure.chain_atoms[0].radii.pop().map(|_| ()).unwrap()),
         Box::new(|r| r.structure.chain_atoms[0].radii[0] = 9.0),
         Box::new(|r| r.structure.molecules[0].radii[0] = 0.1),
+        Box::new(|r| {
+            r.options
+                .chain_modes
+                .insert("unknown".into(), RenderMode::Slice);
+        }),
     ];
     for (i, mutate) in cases.into_iter().enumerate() {
         let mut req = slice_request();
         mutate(&mut req);
         assert!(render(&req).is_err(), "case {i} should fail validation");
     }
+}
+
+#[test]
+fn hybrid_per_component_ribbon_and_slicer_align_and_cache_cleanly() {
+    let mut req = slice_request();
+    req.options.render_mode = RenderMode::Ribbon;
+    req.options
+        .chain_modes
+        .insert("A".into(), RenderMode::Slice);
+    req.options
+        .chain_modes
+        .insert("B".into(), RenderMode::Ribbon);
+    req.options
+        .chain_modes
+        .insert("ligand:1".into(), RenderMode::Ribbon);
+    req.options
+        .chain_colors
+        .insert("ligand:1".into(), "#c4302b".into());
+
+    let out = render(&req).unwrap();
+    assert_eq!(out.residue_count, 40);
+    assert!(out
+        .svg
+        .contains("<title>slicer &amp; test / hybrid plot</title>"));
+    assert!(out
+        .svg
+        .contains("<g id=\"slice-1\" stroke=\"black\" stroke-opacity=\"0.35\">"));
+    assert!(out.svg.contains("<g id=\"pen-1\" stroke=\"#c4302b\">"));
+    assert!(out.svg.contains("<g id=\"pen-2\" stroke=\"black\">"));
+
+    for p in parse_paths(&out.svg).into_iter().flatten() {
+        assert!(p[0] >= 15.2 - 0.0002 && p[0] <= 210.0 - 15.2 + 0.0002);
+        assert!(p[1] >= 15.2 - 0.0002 && p[1] <= 297.0 - 15.2 + 0.0002);
+    }
+
+    let mut session = RenderSession::new(req.structure.clone()).unwrap();
+    let (s0, t0) = session.calculate(req.options.clone(), false).unwrap();
+    assert!(!t0.geometry_cache_hit);
+    assert_eq!(s0.svg, out.svg);
+
+    req.options.rotation = [25.0, -30.0, 12.0];
+    let (s1, t1) = session.calculate(req.options.clone(), false).unwrap();
+    assert!(t1.geometry_cache_hit);
+    assert_eq!(s1.svg, render(&req).unwrap().svg);
+
+    let scene: Value = serde_json::from_str(&session.preview_scene_json().unwrap()).unwrap();
+    assert_eq!(scene["ribbons"].as_array().unwrap().len(), 1);
+    assert_eq!(scene["molecules"].as_array().unwrap().len(), 1);
+    assert_eq!(scene["sliceGroups"].as_array().unwrap().len(), 1);
 }

@@ -177,6 +177,8 @@ pub struct RenderOptions {
     pub slice_ink_opacity: f64,
     pub selected_chains: Vec<String>,
     pub chain_colors: BTreeMap<String, String>,
+    #[serde(default)]
+    pub chain_modes: BTreeMap<String, RenderMode>,
 }
 
 fn default_lipid_width() -> f64 {
@@ -211,6 +213,17 @@ fn default_slice_ink_opacity() -> f64 {
 }
 
 impl RenderOptions {
+    pub fn mode_of(&self, chain_id: &str) -> RenderMode {
+        self.chain_modes
+            .get(chain_id)
+            .copied()
+            .unwrap_or(self.render_mode)
+    }
+    pub fn has_selected_mode(&self, mode: RenderMode) -> bool {
+        self.selected_chains
+            .iter()
+            .any(|id| self.mode_of(id) == mode)
+    }
     pub(crate) fn molecule_style(&self, category: &str) -> MoleculeStyle {
         self.molecule_styles
             .get(category)
@@ -218,12 +231,12 @@ impl RenderOptions {
             .unwrap_or_else(|| default_molecule_style(category))
     }
     pub(crate) fn max_pen_width(&self, structure: &StructureData) -> f64 {
-        if self.render_mode == RenderMode::Ribbon
-            && structure
-                .molecules
-                .iter()
-                .any(|m| m.category == "lipid" && self.selected_chains.contains(&m.chain_id))
-        {
+        let has_ribbon_lipid = structure.molecules.iter().any(|m| {
+            m.category == "lipid"
+                && self.selected_chains.contains(&m.chain_id)
+                && self.mode_of(&m.chain_id) == RenderMode::Ribbon
+        });
+        if has_ribbon_lipid {
             self.pen_width_mm.max(self.lipid_width_mm)
         } else {
             self.pen_width_mm
@@ -263,6 +276,7 @@ impl Default for RenderOptions {
             slice_ink_opacity: default_slice_ink_opacity(),
             selected_chains: Vec::new(),
             chain_colors: BTreeMap::new(),
+            chain_modes: BTreeMap::new(),
         }
     }
 }
@@ -395,6 +409,7 @@ impl RenderRequest {
             || s.chains.len() > 4096
             || o.selected_chains.len() > 4096
             || o.chain_colors.len() > 4096
+            || o.chain_modes.len() > 4096
         {
             return fail("Too many backbone segments or chain entries");
         }
@@ -419,6 +434,9 @@ impl RenderRequest {
         {
             return fail("chainColors must map known IDs to black, red, or #RRGGBB");
         }
+        if o.chain_modes.keys().any(|id| !ids.contains(id.as_str())) {
+            return fail("chainModes contains an unknown chain ID");
+        }
         let mut count = 0usize;
         let mut samples = 0usize;
         for (index, segment) in s.segments.iter().enumerate() {
@@ -429,10 +447,10 @@ impl RenderRequest {
                 ));
             }
             count += n;
-            samples += (n - 1) * o.samples + 1;
-            if count > MAX_RESIDUES
-                || (o.render_mode == RenderMode::Ribbon && samples > MAX_SAMPLES)
-            {
+            if o.mode_of(&segment.chain_id) == RenderMode::Ribbon {
+                samples += (n - 1) * o.samples + 1;
+            }
+            if count > MAX_RESIDUES || samples > MAX_SAMPLES {
                 return fail("Structure exceeds 50000 residues or 200000 spline samples; reduce samples or input size");
             }
             for (i, residue) in segment.residues.iter().enumerate() {
