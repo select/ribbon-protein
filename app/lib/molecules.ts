@@ -4,6 +4,33 @@ import type { ElementIndex } from "molstar/lib/mol-model/structure/model";
 import { SortedArray } from "molstar/lib/mol-data/int";
 import type { Molecule, Vec3 } from "../types/render";
 
+const VDW_RADII: Record<string, number> = {
+  C: 1.7,
+  N: 1.55,
+  O: 1.52,
+  F: 1.47,
+  P: 1.8,
+  S: 1.8,
+  CL: 1.75,
+  BR: 1.85,
+  I: 1.98,
+  SE: 1.9,
+  FE: 2.0,
+  ZN: 1.39,
+  MG: 1.73,
+  CA: 2.0,
+  MN: 2.0,
+  CU: 1.4,
+  NA: 2.27,
+  K: 2.75,
+  NI: 1.63,
+  CO: 2.0,
+};
+
+export function vdwRadius(symbol: string): number {
+  return VDW_RADII[symbol.trim().toUpperCase()] ?? 1.7;
+}
+
 /** Mol* recognizes many simulation lipid names; CCD names cover experimental
  * structures such as PTY, whose chem_comp.type is only `non-polymer`. */
 function isLipid(model: Model, compId: string, type: number | undefined): boolean {
@@ -96,6 +123,7 @@ export function readMolecules(model: Model): Molecule[] {
                     : "molecule",
           atoms: [],
           bonds: [],
+          radii: [],
         };
         molecules.push(molecule);
         if (molecules.length > 4096)
@@ -107,6 +135,7 @@ export function readMolecules(model: Model): Molecule[] {
       for (const a of indices) {
         mapping.set(a, { molecule, atom: molecule.atoms.length });
         molecule.atoms.push([conf.x[a]!, conf.y[a]!, conf.z[a]!] as Vec3);
+        molecule.radii!.push(vdwRadius(h.atoms.type_symbol.value(a)));
         selected.push(a as ElementIndex);
       }
     }

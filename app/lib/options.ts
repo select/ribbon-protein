@@ -2,6 +2,7 @@ import type { RenderOptions, StructureData } from "../types/render";
 import { LIMITS } from "./limits";
 
 export function drawingPenWidth(o: RenderOptions, s: Pick<StructureData, "molecules">): number {
+  if (o.renderMode === "slice") return o.penWidthMm;
   const hasLipids = s.molecules?.some(
     (m) => m.category === "lipid" && o.selectedChains.includes(m.chainId),
   );
@@ -19,6 +20,8 @@ export function validateOptions(o: RenderOptions, s: StructureData): void {
     )
       throw new Error(`${label} must be ${integer ? "an integer " : ""}between ${min} and ${max}.`);
   };
+  if (!["ribbon", "slice"].includes(o.renderMode))
+    throw new Error("Choose ribbon or slice rendering mode.");
   if (!["a4", "a3", "bierdeckel", "custom"].includes(o.paper))
     throw new Error("Choose a valid paper preset.");
   range("Width (mm)", o.widthMm, 10, 2000);
@@ -43,6 +46,18 @@ export function validateOptions(o: RenderOptions, s: StructureData): void {
   o.rotation.forEach((v) => range("Rotation (degrees)", v, -360000, 360000));
   if (!["backbone", "travel"].includes(o.strokeDirection))
     throw new Error("Choose backbone or travel ordering.");
+  if (!["x", "y", "z", "view"].includes(o.sliceAxis))
+    throw new Error("Choose X, Y, Z or View slice axis.");
+  range("Slice count", o.sliceCount, 2, 120, true);
+  range("Slice coarseness", o.sliceCoarseness, 0, 100, true);
+  range("Envelope probe (Å)", o.sliceProbeAngstrom, 0, 3.5);
+  range("Max overdraw passes", o.sliceMaxPasses, 1, 8, true);
+  range("Max parallel lines", o.sliceMaxParallel, 1, 7, true);
+  range("Parallel spacing (mm)", o.sliceParallelSpacingMm, 0.05, 2);
+  range("Depth contrast", o.sliceDepthGamma, 0.4, 3.2);
+  range("Slice ink opacity", o.sliceInkOpacity, 0.1, 1);
+  if (typeof o.slicePerspective !== "boolean")
+    throw new Error("Slice perspective must be true or false.");
   const chains = new Set(s.chains.map((c) => c.id));
   if (o.selectedChains.some((id) => !chains.has(id)))
     throw new Error("An unknown chain is selected.");
@@ -55,15 +70,17 @@ export function validateOptions(o: RenderOptions, s: StructureData): void {
     throw new Error(
       "Chain colors must be black, red or six-digit #RRGGBB values for known chains.",
     );
-  const samples = s.segments.reduce(
-    (n, segment) => n + (segment.residues.length - 1) * o.samples + 1,
-    0,
-  );
-  if (samples > 200_000)
-    throw new Error("Too many spline samples (limit 200,000). Reduce quality or protein size.");
-  const work = samples * (o.lines + 2 * o.borderPasses + (o.fillLoops ? 24 : 0));
-  if (work > LIMITS.renderWork)
-    throw new Error(
-      "This structure/quality combination exceeds the local workload limit. Reduce samples, lines, or disable loop fill.",
+  if (o.renderMode === "ribbon") {
+    const samples = s.segments.reduce(
+      (n, segment) => n + (segment.residues.length - 1) * o.samples + 1,
+      0,
     );
+    if (samples > 200_000)
+      throw new Error("Too many spline samples (limit 200,000). Reduce quality or protein size.");
+    const work = samples * (o.lines + 2 * o.borderPasses + (o.fillLoops ? 24 : 0));
+    if (work > LIMITS.renderWork)
+      throw new Error(
+        "This structure/quality combination exceeds the local workload limit. Reduce samples, lines, or disable loop fill.",
+      );
+  }
 }

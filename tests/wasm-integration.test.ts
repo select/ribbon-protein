@@ -203,5 +203,56 @@ describe.skipIf(!available)(
         expect(next.warnings.join(" ")).toMatch(/hydrogen-bond DSSP/);
       },
     );
+    it("slices parsed protein + lipid envelopes with plotter overdrawing, parallel lines and translucent black ink", async () => {
+      const lipid = await parseStructure(
+        await readFile(new URL("./fixtures/6baj-lipid.cif", import.meta.url), "utf8"),
+        "lipid.cif",
+      );
+      const protein = await parseStructure(
+        await readFile(new URL("../public/examples/1crn-backbone.pdb", import.meta.url), "utf8"),
+        "protein.pdb",
+      );
+      const structure = {
+        ...protein,
+        molecules: lipid.molecules,
+        chains: [...protein.chains, ...lipid.chains],
+      };
+      const options = defaultRenderOptions();
+      options.renderMode = "slice";
+      options.sliceCount = 18;
+      options.sliceMaxPasses = 1;
+      options.sliceMaxParallel = 1;
+      options.sliceInkOpacity = 0.35;
+      options.selectedChains = structure.chains.map((c) => c.id);
+      const session = new Session(JSON.stringify(structure));
+      try {
+        const single = JSON.parse(session.render_options_json(JSON.stringify(options), false));
+        expect(single.result).toEqual(
+          JSON.parse(renderJson(JSON.stringify({ structure, options }))),
+        );
+        validateSvg(single.result.svg);
+        expect(single.result.svg).toContain('stroke="black" stroke-opacity="0.35"');
+        expect(single.result.strokeCount).toBeGreaterThan(10);
+
+        options.sliceMaxPasses = 4;
+        options.sliceMaxParallel = 3;
+        const enriched = JSON.parse(session.render_options_json(JSON.stringify(options), false));
+        expect(enriched.timings.geometryCacheHit).toBe(true);
+        expect(enriched.result.strokeCount).toBeGreaterThan(single.result.strokeCount * 2);
+        expect(enriched.result.lengthMm).toBeGreaterThan(single.result.lengthMm * 2);
+        expect(enriched.result).toEqual(
+          JSON.parse(renderJson(JSON.stringify({ structure, options }))),
+        );
+
+        const scene = JSON.parse(session.preview_scene_json()) as PreviewScene;
+        expect(scene.slices?.length).toBeGreaterThan(4);
+        expect(JSON.stringify(scene)).not.toMatch(/null|NaN|Infinity/);
+        const drag = renderInteractionPreview(scene, options);
+        validateSvg(drag.svg);
+        expect(drag.svg).toContain('stroke="black" stroke-opacity="0.35"');
+      } finally {
+        session.free();
+      }
+    });
   },
 );

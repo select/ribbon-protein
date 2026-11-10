@@ -201,4 +201,49 @@ describe("bounded display-only prepared 3D preview", () => {
     options.samples = 2;
     expect(previewGeometryKey(options)).not.toBe(selected);
   });
+  it("renders slice interaction previews with translucent black strokes and slice-specific geometry keys", () => {
+    const sliceScene: PreviewScene = {
+      center: [0, 0, 0],
+      basis: [
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1],
+      ],
+      ribbons: [],
+      slices: [
+        [
+          [-4, -3, -2],
+          [4, -3, -2],
+          [4, 3, -2],
+          [-4, 3, -2],
+        ],
+        [
+          [-3, -2, 3],
+          [3, -2, 3],
+          [0, 3, 3],
+        ],
+      ],
+      sliceRadius: 6,
+    };
+    const options = defaultRenderOptions();
+    options.renderMode = "slice";
+    options.sliceInkOpacity = 0.35;
+    const first = renderInteractionPreview(sliceScene, options);
+    validateSvg(first.svg);
+    expect(first.strokeCount).toBe(2);
+    expect(first.svg).toContain('stroke="black" stroke-opacity="0.35"');
+    options.rotation = [25, -35, 10];
+    const rotated = renderInteractionPreview(sliceScene, options);
+    expect(rotated.svg).not.toBe(first.svg);
+    options.slicePerspective = false;
+    expect(renderInteractionPreview(sliceScene, options).svg).not.toBe(rotated.svg);
+
+    const fixedKey = previewGeometryKey(options);
+    options.rotation = [50, 10, -5];
+    expect(previewGeometryKey(options)).toBe(fixedKey);
+    options.sliceAxis = "view";
+    const viewKey = previewGeometryKey(options);
+    options.rotation = [55, 10, -5];
+    expect(previewGeometryKey(options)).not.toBe(viewKey);
+  });
 });

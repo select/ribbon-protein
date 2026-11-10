@@ -6,9 +6,9 @@ import { Structure, Unit } from "molstar/lib/mol-model/structure";
 import type { Model, ElementIndex } from "molstar/lib/mol-model/structure/model";
 import { SortedArray } from "molstar/lib/mol-data/int";
 import { computeBackboneDSSP } from "./dssp";
-import type { BackboneSegment, StructureData, Vec3 } from "../types/render";
+import type { BackboneSegment, ChainAtoms, StructureData, Vec3 } from "../types/render";
 import { LIMITS, validateFile } from "./limits";
-import { readMolecules } from "./molecules";
+import { readMolecules, vdwRadius } from "./molecules";
 
 type Atoms = Record<"CA" | "C" | "O" | "N", Vec3> & { OXT?: Vec3 };
 interface SelectedSegment {
@@ -89,6 +89,47 @@ function residueAtoms(
     }
   }
   return { atoms: best, compId, alternate: candidates.size > 1 || candidates.has("") === false };
+}
+
+function residueHeavyAtoms(
+  model: Model,
+  start: number,
+  end: number,
+): { atoms: Vec3[]; radii: number[] } {
+  const { atoms } = model.atomicHierarchy;
+  const conf = model.atomicConformation;
+  const groups = new Map<string, Map<string, number>>();
+  for (let a = start; a < end; a++) {
+    const sym = atoms.type_symbol.value(a);
+    if (["H", "D", "T"].includes(sym)) continue;
+    if (conf.occupancy.value(a) <= 0) continue;
+    const p = [conf.x[a]!, conf.y[a]!, conf.z[a]!];
+    if (p.some((v) => !Number.isFinite(v) || Math.abs(v) > 1e6)) continue;
+    const alt = atoms.label_alt_id.value(a) || "";
+    if (!groups.has(alt)) groups.set(alt, new Map());
+    const group = groups.get(alt)!;
+    const name = atoms.auth_atom_id.value(a) || atoms.label_atom_id.value(a);
+    const old = group.get(name);
+    if (old === undefined || conf.occupancy.value(a) > conf.occupancy.value(old))
+      group.set(name, a);
+  }
+  const blank = groups.get("") ?? new Map<string, number>();
+  const alternates = [...groups.keys()].filter(Boolean).sort();
+  let chosen = blank;
+  let score = -Infinity;
+  for (const alt of alternates) {
+    const merged = new Map([...blank, ...groups.get(alt)!]);
+    const occupancy = [...merged.values()].reduce((sum, a) => sum + conf.occupancy.value(a), 0);
+    if (occupancy > score) {
+      chosen = merged;
+      score = occupancy;
+    }
+  }
+  const indices = [...chosen.values()].sort((a, b) => a - b);
+  return {
+    atoms: indices.map((a): Vec3 => [conf.x[a]!, conf.y[a]!, conf.z[a]!]),
+    radii: indices.map((a) => vdwRadius(atoms.type_symbol.value(a))),
+  };
 }
 
 const cifHeader = [
@@ -193,6 +234,7 @@ export async function parseStructure(text: string, name: string): Promise<Struct
   if (h.residues._rowCount > LIMITS.residues)
     throw new Error("Too many residues (limit 10,000). Export a smaller structure.");
   const segments: SelectedSegment[] = [];
+  const heavyByChain = new Map<string, { atoms: Vec3[]; radii: number[] }>();
   let incomplete = 0,
     short = 0,
     alternates = 0,
@@ -211,11 +253,25 @@ export async function parseStructure(text: string, name: string): Promise<Struct
     const start = h.residueAtomSegments.index[startAtom]!;
     const end = h.residueAtomSegments.index[endAtom - 1]! + 1;
     let current: SelectedSegment["atoms"] = [];
+    let currentHeavy: { atoms: Vec3[]; radii: number[] }[] = [];
     let previousSeq: number | undefined;
     const flush = () => {
       if (current.length) segments.push({ chainId, atoms: current });
-      if (current.length < 4) short += current.length;
+      if (current.length >= 4) {
+        let target = heavyByChain.get(chainId);
+        if (!target) {
+          target = { atoms: [], radii: [] };
+          heavyByChain.set(chainId, target);
+        }
+        for (const res of currentHeavy) {
+          target.atoms.push(...res.atoms);
+          target.radii.push(...res.radii);
+        }
+      } else {
+        short += current.length;
+      }
       current = [];
+      currentHeavy = [];
       previousSeq = undefined;
     };
     for (let r = start; r < end; r++) {
@@ -253,6 +309,13 @@ export async function parseStructure(text: string, name: string): Promise<Struct
         flush();
       }
       current.push({ atoms: selected.atoms, compId: selected.compId });
+      currentHeavy.push(
+        residueHeavyAtoms(
+          model,
+          h.residueAtomSegments.offsets[r]!,
+          h.residueAtomSegments.offsets[r + 1]!,
+        ),
+      );
       previousSeq = seq;
     }
     flush();
@@ -295,10 +358,15 @@ export async function parseStructure(text: string, name: string): Promise<Struct
     warnings.push(
       `${alternates} alternate-location residues: one complete conformer selected by occupancy (lexical ties), with shared blank atoms.`,
     );
+  const chainAtoms: ChainAtoms[] = [...counts.keys()].flatMap((chainId) => {
+    const entry = heavyByChain.get(chainId);
+    return entry && entry.atoms.length ? [{ chainId, atoms: entry.atoms, radii: entry.radii }] : [];
+  });
   return {
     name,
     segments: assigned,
     molecules,
+    ...(chainAtoms.length ? { chainAtoms } : {}),
     chains: [
       ...[...counts].map(([id, residueCount]) => ({ id, residueCount })),
       ...molecules.map((m) => ({ id: m.chainId, residueCount: 0 })),

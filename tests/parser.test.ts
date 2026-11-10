@@ -320,4 +320,31 @@ describe("local hydrogen-bond DSSP parser", () => {
       spy.mockRestore();
     }
   });
+  it("extracts heavy-atom coordinates and van der Waals radii per drawn protein chain for slicing", async () => {
+    const withSidechain =
+      protein(8).replace(/\nEND\n$/, "") +
+      "\n" +
+      pdbAtom(
+        900,
+        "CB",
+        2,
+        "A",
+        points[1]!.CA.map((v, i) => v + (i === 0 ? 1.52 : 0)),
+      ).replace(/\s+[A-Z]$/, "           C") +
+      "\n" +
+      pdbAtom(
+        901,
+        "SG",
+        2,
+        "A",
+        points[1]!.CA.map((v, i) => v + (i === 1 ? 1.8 : 0)),
+      ).replace(/\s+[A-Z]$/, "           S") +
+      "\nEND\n";
+    const parsed = await parseStructure(withSidechain, "heavy.pdb");
+    expect(parsed.chainAtoms).toHaveLength(1);
+    expect(parsed.chainAtoms![0]!.chainId).toBe("A");
+    expect(parsed.chainAtoms![0]!.atoms).toHaveLength(8 * 4 + 2);
+    expect(parsed.chainAtoms![0]!.radii).toHaveLength(8 * 4 + 2);
+    expect(parsed.chainAtoms![0]!.radii).toContain(1.8);
+  });
 });

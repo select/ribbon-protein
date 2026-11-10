@@ -10,6 +10,8 @@ export interface BackboneSegment {
   chainId: string;
   residues: BackboneResidue[];
 }
+export type RenderMode = "ribbon" | "slice";
+export type SliceAxis = "x" | "y" | "z" | "view";
 export type MoleculeCategory = "lipid" | "molecule" | "nucleic" | "water" | "ion";
 export interface MoleculeStyle {
   /** Real longitudinal tracks between two bond outlines. */
@@ -30,16 +32,25 @@ export interface Molecule {
   atoms: Vec3[];
   /** Heavy-atom covalent bonds, irrespective of bond order. */
   bonds: [number, number][];
+  /** Optional per-atom van der Waals radii in Å for molecular envelope slicing. */
+  radii?: number[];
+}
+export interface ChainAtoms {
+  chainId: string;
+  atoms: Vec3[];
+  radii?: number[];
 }
 export interface StructureData {
   name: string;
   segments: BackboneSegment[];
   molecules?: Molecule[];
+  chainAtoms?: ChainAtoms[];
   chains: { id: string; residueCount: number }[];
   residueCount: number;
   warnings: string[];
 }
 export interface RenderOptions {
+  renderMode: RenderMode;
   paper: "a4" | "a3" | "bierdeckel" | "custom";
   landscape: boolean;
   widthMm: number;
@@ -56,6 +67,16 @@ export interface RenderOptions {
   borderPasses: number;
   borderSpacingMm: number;
   strokeDirection: "backbone" | "travel";
+  sliceAxis: SliceAxis;
+  sliceCount: number;
+  sliceCoarseness: number;
+  sliceProbeAngstrom: number;
+  sliceMaxPasses: number;
+  sliceMaxParallel: number;
+  sliceParallelSpacingMm: number;
+  sliceDepthGamma: number;
+  slicePerspective: boolean;
+  sliceInkOpacity: number;
   selectedChains: string[];
   chainColors: Record<string, string>;
 }
@@ -71,6 +92,8 @@ export interface PreviewScene {
   center: Vec3;
   basis: [Vec3, Vec3, Vec3];
   molecules?: PreviewMolecule[];
+  slices?: Vec3[][];
+  sliceRadius?: number;
   ribbons: {
     chainId: string;
     samples: { point: Vec3; side: Vec3; width: number; alpha: number }[];
@@ -123,6 +146,7 @@ export const PAPER_PRESETS = {
 
 export function defaultRenderOptions(): RenderOptions {
   return {
+    renderMode: "ribbon",
     paper: "a4",
     landscape: false,
     widthMm: 210,
@@ -145,6 +169,16 @@ export function defaultRenderOptions(): RenderOptions {
     borderPasses: 3,
     borderSpacingMm: 0.1,
     strokeDirection: "backbone",
+    sliceAxis: "z",
+    sliceCount: 28,
+    sliceCoarseness: 40,
+    sliceProbeAngstrom: 1.4,
+    sliceMaxPasses: 4,
+    sliceMaxParallel: 3,
+    sliceParallelSpacingMm: 0.22,
+    sliceDepthGamma: 1.4,
+    slicePerspective: true,
+    sliceInkOpacity: 0.35,
     selectedChains: [],
     chainColors: {},
   };

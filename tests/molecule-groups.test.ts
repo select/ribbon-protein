@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   colorMoleculeGroup,
+  componentGroups,
+  groupSwatchColor,
   moleculeGroups,
   selectMoleculeGroup,
 } from "../app/lib/molecule-groups";
@@ -78,5 +80,33 @@ describe("molecule group controls", () => {
     expect(drawingPenWidth(o, mixed)).toBe(0.4);
     o.lipidWidthMm = 0;
     expect(() => validateOptions(o, mixed)).toThrow(/Lipid stroke width/);
+  });
+  it("builds collapsible tree groups for protein chains and molecule types with shared parent swatch behavior", () => {
+    expect(componentGroups(mixed)).toEqual([
+      { key: "protein", label: "Protein chains", ids: ["A"], defaultExpanded: true },
+      { key: "lipid", label: "Lipids", ids: ["l1", "l2"], defaultExpanded: true },
+      { key: "molecule", label: "Other molecules", ids: ["other"], defaultExpanded: true },
+      { key: "water", label: "Water", ids: ["water"], defaultExpanded: false },
+    ]);
+    const o = defaultRenderOptions();
+    expect(groupSwatchColor(o.chainColors, ["A"])).toBe("#191918");
+    colorMoleculeGroup(o, ["A"], "#1f5fbf");
+    expect(groupSwatchColor(o.chainColors, ["A"])).toBe("#1f5fbf");
+  });
+  it("validates slicer options and uses single-pen clearance in slice mode", () => {
+    const o = defaultRenderOptions();
+    o.renderMode = "slice";
+    o.selectedChains = ["A", "l1"];
+    o.lipidWidthMm = 1.6;
+    expect(drawingPenWidth(o, mixed)).toBe(o.penWidthMm);
+    validateOptions(o, mixed);
+    o.sliceMaxPasses = 0;
+    expect(() => validateOptions(o, mixed)).toThrow(/Max overdraw passes/);
+    o.sliceMaxPasses = 4;
+    o.sliceMaxParallel = 8;
+    expect(() => validateOptions(o, mixed)).toThrow(/Max parallel lines/);
+    o.sliceMaxParallel = 3;
+    o.sliceInkOpacity = 0.05;
+    expect(() => validateOptions(o, mixed)).toThrow(/Slice ink opacity/);
   });
 });

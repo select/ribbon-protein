@@ -4,7 +4,19 @@ import { molecularPreviewContours } from "./molecular-preview";
 
 type P2 = [number, number];
 export function previewGeometryKey(options: RenderOptions): string {
-  return JSON.stringify([options.samples, [...new Set(options.selectedChains)].sort()]);
+  const chains = [...new Set(options.selectedChains)].sort();
+  if (options.renderMode === "slice") {
+    return JSON.stringify([
+      "slice",
+      options.sliceAxis,
+      options.sliceAxis === "view" ? options.rotation : "fixed",
+      options.sliceCount,
+      options.sliceCoarseness,
+      options.sliceProbeAngstrom,
+      chains,
+    ]);
+  }
+  return JSON.stringify([options.samples, chains]);
 }
 const dot = (a: number[], b: number[]) => a.reduce((s, v, i) => s + v * b[i]!, 0);
 const combine = (a: Vec3, x: number, b: Vec3, y: number): Vec3 =>
@@ -37,6 +49,66 @@ export function renderInteractionPreview(scene: PreviewScene, o: RenderOptions):
   }
   const low: P2 = [Infinity, Infinity],
     high: P2 = [-Infinity, -Infinity];
+  if (o.renderMode === "slice") {
+    const invR = 1 / Math.max(scene.sliceRadius ?? 1, 1e-6);
+    const FOC = 3.4;
+    const projected: P2[][] = (scene.slices ?? []).flatMap((loop) => {
+      if (loop.length < 3) return [];
+      const pts: P2[] = loop.map((pt) => {
+        const p = pt.map((v, i) => v - scene.center[i]!);
+        const x = dot(basis[0], p);
+        const y = -dot(basis[1], p);
+        const z = dot(basis[2], p);
+        const k = o.slicePerspective ? FOC / Math.max(FOC - z * invR, 0.35) : 1;
+        const out: P2 = [x * k, y * k];
+        for (const j of [0, 1] as const) {
+          low[j] = Math.min(low[j], out[j]);
+          high[j] = Math.max(high[j], out[j]);
+        }
+        return out;
+      });
+      pts.push(pts[0]!);
+      return [pts];
+    });
+    const span: P2 = [high[0] - low[0], high[1] - low[1]];
+    const scale = Math.min(
+      (o.widthMm - 2 * o.marginMm - o.penWidthMm) / Math.max(span[0], 1e-12),
+      (o.heightMm - 2 * o.marginMm - o.penWidthMm) / Math.max(span[1], 1e-12),
+    );
+    const paths: string[] = [];
+    let lengthMm = 0;
+    for (const path of projected) {
+      const fitted = path.map(
+        (p): P2 => [
+          (p[0] - (low[0] + high[0]) * 0.5) * scale + o.widthMm * 0.5,
+          (p[1] - (low[1] + high[1]) * 0.5) * scale + o.heightMm * 0.5,
+        ],
+      );
+      if (!fitted.length || fitted.some((p) => !p.every(Number.isFinite))) continue;
+      for (let i = 1; i < fitted.length; i++)
+        lengthMm += Math.hypot(
+          fitted[i]![0] - fitted[i - 1]![0],
+          fitted[i]![1] - fitted[i - 1]![1],
+        );
+      paths.push(
+        `<path d="${fitted.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(4)},${p[1].toFixed(4)}`).join("")}"/>`,
+      );
+    }
+    const opacity = Number(o.sliceInkOpacity.toFixed(3));
+    return {
+      svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${o.widthMm}mm" height="${o.heightMm}mm" viewBox="0 0 ${o.widthMm} ${o.heightMm}"><title>Interaction preview</title><desc>Approximate 3D slice contours. Overdraw and parallel tracks are omitted. Not for export.</desc><g fill="none" stroke="black" stroke-opacity="${opacity}" stroke-width="${o.penWidthMm}" stroke-linecap="round" stroke-linejoin="round">${paths.join("")}</g></svg>`,
+      widthMm: o.widthMm,
+      heightMm: o.heightMm,
+      strokeCount: paths.length,
+      lengthMm,
+      residueCount: 0,
+      elapsedMs: performance.now() - started,
+      quality: "preview",
+      warnings: [
+        "Interaction preview only; refine for exact parallel tracks, overdraw passes and physical statistics.",
+      ],
+    };
+  }
   const ribbons = scene.ribbons.map((ribbon) => {
     const screen: P2[] = ribbon.samples.map((sample) => {
       const p = sample.point.map((v, i) => v - scene.center[i]!);
