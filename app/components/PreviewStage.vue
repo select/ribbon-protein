@@ -237,7 +237,9 @@ onBeforeUnmount(() => {
     <div v-else-if="!hasStructure && isLoading" class="empty">
       <div class="loading" role="status">
         <span class="rs-spinner" />
-        <span>Reading {{ studio.fileName || "structure" }} locally…</span>
+        <span class="loading-text" :title="studio.fileName || 'structure'"
+          >Reading {{ studio.fileName || "structure" }} locally…</span
+        >
         <button type="button" class="rs-btn rs-btn--sm" @click="studio.cancel()">Cancel</button>
       </div>
     </div>
@@ -385,8 +387,22 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  max-width: 100%;
+  min-width: 0;
   font-size: 13px;
   color: var(--rs-muted);
+}
+
+.loading .rs-spinner,
+.loading .rs-btn {
+  flex: none;
+}
+
+.loading-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ------------------------------------------------------------------- sheet */

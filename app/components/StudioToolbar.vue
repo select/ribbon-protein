@@ -145,6 +145,15 @@ const title = computed(() => studio.fileName || studio.structure?.name || "Untit
   min-width: 0;
 }
 
+.left {
+  flex: 1 1 0;
+  overflow: hidden;
+}
+
+.left .rs-btn {
+  flex: none;
+}
+
 .right {
   flex: none;
   gap: 6px;

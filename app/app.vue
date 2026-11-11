@@ -270,7 +270,9 @@ onBeforeUnmount(() => {
 .sidebar {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
+  overflow: hidden;
   border-right: 1px solid var(--rs-line);
   background: var(--rs-sidebar);
 }
@@ -310,6 +312,7 @@ onBeforeUnmount(() => {
 
 .sidebar-scroll {
   flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;

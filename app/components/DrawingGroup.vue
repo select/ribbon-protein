@@ -31,7 +31,9 @@ summary:focus-visible {
 }
 .drawing-controls {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
+  min-width: 0;
   padding: 2px 10px 12px;
 }
 </style>

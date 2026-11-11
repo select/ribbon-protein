@@ -386,6 +386,7 @@ function countLabel(id: string): string {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
   padding: 8px 8px 8px 10px;
   border: 1px solid var(--rs-line);
   border-radius: var(--rs-radius);
@@ -393,11 +394,16 @@ function countLabel(id: string): string {
 }
 
 .file-icon {
+  flex: none;
   color: var(--rs-muted);
 }
 
+.file .rs-btn {
+  flex: none;
+}
+
 .file-text {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-width: 0;
 }
 
@@ -411,19 +417,26 @@ function countLabel(id: string): string {
 }
 
 .file-meta {
+  overflow: hidden;
   font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   color: var(--rs-muted);
 }
 
 .chains {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
+  min-width: 0;
 }
 
 .chains-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
 }
 
 .count {
@@ -434,13 +447,16 @@ function countLabel(id: string): string {
 
 .chains-actions {
   display: flex;
+  flex: none;
   gap: 2px;
 }
 
 .component-tree {
+  min-width: 0;
   max-height: 272px;
   margin: 0;
   padding: 3px;
+  overflow-x: hidden;
   overflow-y: auto;
   list-style: none;
   border: 1px solid var(--rs-line);
@@ -456,6 +472,7 @@ function countLabel(id: string): string {
   display: flex;
   align-items: center;
   gap: 3px;
+  min-width: 0;
   padding: 0 2px;
   border-radius: var(--rs-radius-sm);
 }
@@ -544,6 +561,7 @@ function countLabel(id: string): string {
 }
 
 .row-count {
+  flex: none;
   margin-left: auto;
   padding-left: 4px;
   font-size: 11px;

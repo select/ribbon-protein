@@ -44,6 +44,7 @@ const id = useId();
 
 <style scoped>
 .section {
+  min-width: 0;
   padding: 14px 16px 18px;
   border-top: 1px solid var(--rs-line);
 }
@@ -57,16 +58,21 @@ const id = useId();
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  min-width: 0;
   min-height: 24px;
   margin-bottom: 10px;
 }
 
 .title {
+  min-width: 0;
   margin: 0;
+  overflow: hidden;
   font-size: 11.5px;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--rs-muted);
 }
 
@@ -101,11 +107,14 @@ const id = useId();
 
 .actions {
   display: flex;
+  flex: none;
   gap: 2px;
 }
 
 .body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
+  min-width: 0;
 }
 </style>
