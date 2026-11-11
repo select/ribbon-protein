@@ -433,3 +433,115 @@ fn slice_direction_rotation_crosshatch_angle_and_spiral_density_work_and_cache()
         .unwrap()
         .is_empty());
 }
+
+#[test]
+fn spiral_starts_at_each_peak_and_connects_into_a_single_spiral_on_shared_trunk() {
+    // 1. Single spherical globe -> exactly ONE unbroken pole-to-pole spiral polyline.
+    let sphere_req = RenderRequest {
+        structure: StructureData {
+            name: "sphere".into(),
+            segments: vec![],
+            molecules: vec![Molecule {
+                chain_id: "ball".into(),
+                label: "BALL".into(),
+                category: "ion".into(),
+                atoms: vec![[0.0, 0.0, 0.0]],
+                bonds: vec![],
+                radii: vec![3.8],
+            }],
+            chain_atoms: vec![],
+            chains: vec![Chain {
+                id: "ball".into(),
+                residue_count: 0,
+            }],
+            residue_count: 0,
+            warnings: vec![],
+        },
+        options: RenderOptions {
+            render_mode: RenderMode::Slice,
+            slice_pattern: SlicePattern::Spiral,
+            slice_spiral_density: 18.0,
+            slice_probe_angstrom: 2.0,
+            slice_coarseness: 20,
+            slice_max_passes: 1,
+            slice_max_parallel: 1,
+            rotation: [38.0, 0.0, 0.0],
+            selected_chains: vec!["ball".into()],
+            ..RenderOptions::default()
+        },
+    };
+    let mut sphere_session = RenderSession::new(sphere_req.structure.clone()).unwrap();
+    let (sphere_svg, _) = sphere_session
+        .calculate(sphere_req.options.clone(), false)
+        .unwrap();
+    assert_eq!(sphere_svg.stroke_count, 1);
+    let sphere_scene: Value =
+        serde_json::from_str(&sphere_session.preview_scene_json().unwrap()).unwrap();
+    let sphere_polys = sphere_scene["sliceGroups"][0]["polylines"]
+        .as_array()
+        .unwrap();
+    assert_eq!(sphere_polys.len(), 1);
+
+    // 2. Two tall peaks (left & right) merging into ONE shared base trunk below z = 0:
+    // Both peaks start their own summit spiral, and the secondary peak spiral merges
+    // directly onto the primary spiral on the shared trunk.
+    let mut y_atoms = Vec::new();
+    for k in 0..=10 {
+        let z = -14.0 + k as f64 * 1.4;
+        y_atoms.push([-2.2, 0.0, z]);
+        y_atoms.push([2.2, 0.0, z]);
+    }
+    for k in 1..=10 {
+        let z = k as f64 * 1.5;
+        let sep = 2.2 + k as f64 * 0.75;
+        y_atoms.push([-sep, 0.0, z]);
+        y_atoms.push([sep, 0.0, z]);
+    }
+    let radii = vec![2.2; y_atoms.len()];
+    let two_peak_req = RenderRequest {
+        structure: StructureData {
+            name: "two-peaks".into(),
+            segments: vec![],
+            molecules: vec![Molecule {
+                chain_id: "y".into(),
+                label: "Y".into(),
+                category: "molecule".into(),
+                atoms: y_atoms,
+                bonds: vec![],
+                radii,
+            }],
+            chain_atoms: vec![],
+            chains: vec![Chain {
+                id: "y".into(),
+                residue_count: 0,
+            }],
+            residue_count: 0,
+            warnings: vec![],
+        },
+        options: RenderOptions {
+            render_mode: RenderMode::Slice,
+            slice_axis: SliceAxis::Y,
+            slice_pattern: SlicePattern::Spiral,
+            slice_spiral_density: 24.0,
+            slice_probe_angstrom: 1.5,
+            slice_coarseness: 20,
+            slice_max_passes: 1,
+            slice_max_parallel: 1,
+            selected_chains: vec!["y".into()],
+            ..RenderOptions::default()
+        },
+    };
+    let mut two_session = RenderSession::new(two_peak_req.structure.clone()).unwrap();
+    let (two_res, _) = two_session
+        .calculate(two_peak_req.options.clone(), false)
+        .unwrap();
+    assert_eq!(two_res.stroke_count, 2);
+    let two_scene: Value =
+        serde_json::from_str(&two_session.preview_scene_json().unwrap()).unwrap();
+    let polys = two_scene["sliceGroups"][0]["polylines"].as_array().unwrap();
+    assert_eq!(
+        polys.len(),
+        2,
+        "expected 2 spirals (main peak->trunk + secondary peak->saddle merge)"
+    );
+}
