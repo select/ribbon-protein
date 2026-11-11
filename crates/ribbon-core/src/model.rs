@@ -88,6 +88,15 @@ pub enum SliceAxis {
     View,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SlicePattern {
+    #[default]
+    Slices,
+    Crosshatch,
+    Spiral,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Paper {
@@ -157,8 +166,16 @@ pub struct RenderOptions {
     pub stroke_direction: StrokeDirection,
     #[serde(default)]
     pub slice_axis: SliceAxis,
+    #[serde(default)]
+    pub slice_rotation: Vec3,
+    #[serde(default)]
+    pub slice_pattern: SlicePattern,
     #[serde(default = "default_slice_count")]
     pub slice_count: usize,
+    #[serde(default = "default_slice_hatch_angle")]
+    pub slice_hatch_angle: f64,
+    #[serde(default = "default_slice_spiral_density")]
+    pub slice_spiral_density: f64,
     #[serde(default = "default_slice_coarseness")]
     pub slice_coarseness: usize,
     #[serde(default = "default_slice_probe")]
@@ -186,6 +203,12 @@ fn default_lipid_width() -> f64 {
 }
 fn default_slice_count() -> usize {
     28
+}
+fn default_slice_hatch_angle() -> f64 {
+    60.0
+}
+fn default_slice_spiral_density() -> f64 {
+    28.0
 }
 fn default_slice_coarseness() -> usize {
     40
@@ -265,7 +288,11 @@ impl Default for RenderOptions {
             border_spacing_mm: 0.1,
             stroke_direction: StrokeDirection::Backbone,
             slice_axis: SliceAxis::Z,
+            slice_rotation: [0.0; 3],
+            slice_pattern: SlicePattern::Slices,
             slice_count: default_slice_count(),
+            slice_hatch_angle: default_slice_hatch_angle(),
+            slice_spiral_density: default_slice_spiral_density(),
             slice_coarseness: default_slice_coarseness(),
             slice_probe_angstrom: default_slice_probe(),
             slice_max_passes: default_slice_max_passes(),
@@ -382,12 +409,20 @@ impl RenderRequest {
         if !bounded(o.loop_spacing_mm, 0.02, 10.0) || !bounded(o.border_spacing_mm, 0.01, 10.0) {
             return fail("loopSpacingMm must be 0.02..10 and borderSpacingMm 0.01..10");
         }
+        if o.slice_rotation
+            .iter()
+            .any(|v| !bounded(*v, -360_000.0, 360_000.0))
+        {
+            return fail("sliceRotation must contain finite angles in [-360000, 360000] degrees");
+        }
         if !(2..=120).contains(&o.slice_count)
+            || !bounded(o.slice_hatch_angle, 5.0, 175.0)
+            || !bounded(o.slice_spiral_density, 1.0, 160.0)
             || o.slice_coarseness > 100
             || !bounded(o.slice_probe_angstrom, 0.0, 3.5)
         {
             return fail(
-                "sliceCount must be 2..120, sliceCoarseness 0..100, and sliceProbeAngstrom 0..3.5",
+                "sliceCount must be 2..120, sliceHatchAngle 5..175, sliceSpiralDensity 1..160, sliceCoarseness 0..100, and sliceProbeAngstrom 0..3.5",
             );
         }
         if !(1..=8).contains(&o.slice_max_passes)

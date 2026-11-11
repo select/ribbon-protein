@@ -1,16 +1,19 @@
 //! Sliced molecular surface contours for pen plotting.
 //!
 //! Builds a 3D Gaussian occupancy field from heavy atoms, extracts section
-//! contours via edge-indexed marching squares, and encodes 3D depth for
-//! single-pen plotters through parallel contour tracks and multi-pass overdraw.
+//! contours (parallel slices, steerable cross-hatch lattices, or continuous
+//! helical surface spirals) via edge-indexed marching squares, and encodes 3D
+//! depth for single-pen plotters through parallel contour tracks and multi-pass
+//! overdraw.
 
 use crate::math::{self, add, dot, lerp, mul, norm, sub, Camera, P2, V3};
 use crate::model::{
     fail, RenderError, RenderMode, RenderOptions, RenderRequest, RenderResult, SliceAxis,
-    StrokeDirection, StructureData, MAX_PIECES,
+    SlicePattern, StrokeDirection, StructureData, MAX_PIECES,
 };
 use rstar::{PointDistance, RTree, RTreeObject, AABB};
 use std::collections::{BTreeMap, HashSet};
+use std::f64::consts::{FRAC_1_SQRT_2, PI, TAU};
 use std::fmt::Write;
 
 const BLOB: f64 = 0.55;
@@ -25,8 +28,12 @@ pub(crate) struct SliceKey {
     colored_chains: Vec<(String, String)>,
     camera_sig: Option<[u64; 12]>,
     axis: SliceAxis,
+    slice_rotation: [u64; 3],
     view_rotation: Option<[u64; 3]>,
+    pattern: SlicePattern,
     slice_count: usize,
+    hatch_angle_bits: u64,
+    spiral_density_bits: u64,
     coarseness: usize,
     probe_bits: u64,
 }
@@ -36,6 +43,8 @@ pub(crate) struct SliceKey {
 pub(crate) struct PreparedSliceGroup {
     pub(crate) color: String,
     pub(crate) loops: Vec<Vec<V3>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) polylines: Vec<Vec<V3>>,
 }
 
 #[derive(Clone)]
@@ -86,12 +95,26 @@ impl SliceKey {
             .collect();
         let view_rotation = (options.slice_axis == SliceAxis::View)
             .then(|| options.rotation.map(|angle| (angle + 0.0).to_bits()));
+        let slice_rotation = options.slice_rotation.map(|angle| (angle + 0.0).to_bits());
+        let (slice_count, hatch_angle_bits, spiral_density_bits) = match options.slice_pattern {
+            SlicePattern::Slices => (options.slice_count, 0, 0),
+            SlicePattern::Crosshatch => (
+                options.slice_count,
+                (options.slice_hatch_angle + 0.0).to_bits(),
+                0,
+            ),
+            SlicePattern::Spiral => (0, 0, (options.slice_spiral_density + 0.0).to_bits()),
+        };
         Self {
             colored_chains,
             camera_sig: override_camera.map(camera_signature),
             axis: options.slice_axis,
+            slice_rotation,
             view_rotation,
-            slice_count: options.slice_count,
+            pattern: options.slice_pattern,
+            slice_count,
+            hatch_angle_bits,
+            spiral_density_bits,
             coarseness: options.slice_coarseness,
             probe_bits: (options.slice_probe_angstrom + 0.0).to_bits(),
         }
@@ -165,12 +188,18 @@ pub(crate) fn collect_atoms_by_color(
 
 fn section_basis(camera: &Camera, options: &RenderOptions) -> [V3; 3] {
     let b = camera.basis;
-    match options.slice_axis {
+    let base = match options.slice_axis {
         SliceAxis::Z => b,
-        SliceAxis::Y => [b[2], b[0], b[1]],
+        SliceAxis::Y => [b[0], mul(b[2], -1.0), b[1]],
         SliceAxis::X => [b[1], b[2], b[0]],
         SliceAxis::View => camera.rotated(options.rotation).basis,
+    };
+    Camera {
+        center: camera.center,
+        basis: base,
     }
+    .rotated(options.slice_rotation)
+    .basis
 }
 
 struct ScalarField {
@@ -182,8 +211,8 @@ struct ScalarField {
     ox: f64,
     oy: f64,
     oz: f64,
-    z_min: f64,
-    z_max: f64,
+    low: [f64; 3],
+    high: [f64; 3],
     coarsened: bool,
 }
 
@@ -268,20 +297,10 @@ fn build_field(
         }
     }
 
-    let blur_passes = if coarseness > 88 {
-        3
-    } else if coarseness > 65 {
-        2
-    } else if coarseness > 35 {
-        1
-    } else {
-        0
-    };
-    if blur_passes > 0 {
-        let mut line = vec![0.0f32; nx.max(ny).max(nz)];
-        for _ in 0..blur_passes {
-            box_blur_3d(&mut grid, nx, ny, nz, &mut line);
-        }
+    let blur_passes = (1.0 + 3.0 * c).round() as usize;
+    let mut line = vec![0.0f32; nx.max(ny).max(nz)];
+    for _ in 0..blur_passes {
+        box_blur_3d(&mut grid, nx, ny, nz, &mut line);
     }
 
     ScalarField {
@@ -293,8 +312,8 @@ fn build_field(
         ox,
         oy,
         oz,
-        z_min: low[2],
-        z_max: high[2],
+        low,
+        high,
         coarsened: h > initial_h * 1.01,
     }
 }
@@ -359,14 +378,59 @@ fn plane_at(field: &ScalarField, z: f64, out: &mut [f32]) {
     }
 }
 
-/// Exact grid-edge marching squares. Every crossed grid edge receives a unique
-/// integer ID and consistent CCW orientation around `v > ISO`, so segments
-/// stitch deterministically into closed loops without float-hash collisions.
-fn marching_squares(plane: &[f32], nx: usize, ny: usize, ox: f64, oy: f64, h: f64) -> Vec<Vec<P2>> {
+fn sample_trilinear(field: &ScalarField, u: f64, v: f64, w: f64) -> f32 {
+    let fx = (u - field.ox) / field.h;
+    let fy = (v - field.oy) / field.h;
+    let fz = (w - field.oz) / field.h;
+    if fx < 0.0
+        || fy < 0.0
+        || fz < 0.0
+        || fx >= (field.nx - 1) as f64
+        || fy >= (field.ny - 1) as f64
+        || fz >= (field.nz - 1) as f64
+    {
+        return 0.0;
+    }
+    let i = (fx.floor() as usize).min(field.nx - 2);
+    let j = (fy.floor() as usize).min(field.ny - 2);
+    let k = (fz.floor() as usize).min(field.nz - 2);
+    let tx = (fx - i as f64) as f32;
+    let ty = (fy - j as f64) as f32;
+    let tz = (fz - k as f64) as f32;
+    let plane = field.nx * field.ny;
+    let idx00 = k * plane + j * field.nx + i;
+    let idx10 = idx00 + field.nx;
+    let idx01 = idx00 + plane;
+    let idx11 = idx01 + field.nx;
+    let c00 = field.grid[idx00] * (1.0 - tx) + field.grid[idx00 + 1] * tx;
+    let c10 = field.grid[idx10] * (1.0 - tx) + field.grid[idx10 + 1] * tx;
+    let c01 = field.grid[idx01] * (1.0 - tx) + field.grid[idx01 + 1] * tx;
+    let c11 = field.grid[idx11] * (1.0 - tx) + field.grid[idx11 + 1] * tx;
+    let c0 = c00 * (1.0 - ty) + c10 * ty;
+    let c1 = c01 * (1.0 - ty) + c11 * ty;
+    c0 * (1.0 - tz) + c1 * tz
+}
+
+/// Exact grid-edge marching squares returning (closed_loops, open_arcs).
+/// Every crossed grid edge receives a unique integer ID and consistent CCW
+/// orientation around v > ISO. Boundary-clipped chains without incoming edges
+/// are traced first as unbroken open arcs; remaining cycles form closed loops.
+fn marching_squares_paths(
+    plane: &[f32],
+    nx: usize,
+    ny: usize,
+    ox: f64,
+    oy: f64,
+    h: f64,
+) -> (Vec<Vec<P2>>, Vec<Vec<P2>>) {
+    if nx < 2 || ny < 2 {
+        return (Vec::new(), Vec::new());
+    }
     let h_count = ny * nx;
     let total_edges = h_count + (ny - 1) * (nx + 1);
     let mut edge_point = vec![[0.0; 2]; total_edges];
     let mut next_edge = vec![u32::MAX; total_edges];
+    let mut has_prev = vec![false; total_edges];
     let mut active_starts = Vec::new();
 
     let interp = |va: f32, vb: f32| -> f64 {
@@ -382,6 +446,7 @@ fn marching_squares(plane: &[f32], nx: usize, ny: usize, ox: f64, oy: f64, h: f6
         edge_point[from] = fp;
         edge_point[to] = tp;
         next_edge[from] = to as u32;
+        has_prev[to] = true;
         active_starts.push(from as u32);
     };
 
@@ -450,9 +515,30 @@ fn marching_squares(plane: &[f32], nx: usize, ny: usize, ox: f64, oy: f64, h: f6
     }
 
     let mut visited = vec![false; total_edges];
+    let mut open_arcs = Vec::new();
+    for &start_id in &active_starts {
+        let start = start_id as usize;
+        if visited[start] || has_prev[start] {
+            continue;
+        }
+        let mut pts = Vec::new();
+        let mut cur = start;
+        while cur != u32::MAX as usize && !visited[cur] {
+            visited[cur] = true;
+            pts.push(edge_point[cur]);
+            cur = next_edge[cur] as usize;
+        }
+        if cur != u32::MAX as usize && pts.last() != Some(&edge_point[cur]) {
+            pts.push(edge_point[cur]);
+        }
+        if pts.len() >= 2 {
+            open_arcs.push(pts);
+        }
+    }
+
     let mut loops = Vec::new();
-    for start in active_starts {
-        let start = start as usize;
+    for start_id in active_starts {
+        let start = start_id as usize;
         if visited[start] {
             continue;
         }
@@ -467,7 +553,7 @@ fn marching_squares(plane: &[f32], nx: usize, ny: usize, ox: f64, oy: f64, h: f6
             loops.push(pts);
         }
     }
-    loops
+    (loops, open_arcs)
 }
 
 fn rdp_open(pts: &[P2], tol: f64) -> Vec<P2> {
@@ -513,6 +599,52 @@ fn rdp_open(pts: &[P2], tol: f64) -> Vec<P2> {
         .collect()
 }
 
+fn rdp_open_3d(pts: &[V3], tol: f64) -> Vec<V3> {
+    let n = pts.len();
+    if n < 3 || tol <= 0.0 {
+        return pts.to_vec();
+    }
+    let mut keep = vec![false; n];
+    keep[0] = true;
+    keep[n - 1] = true;
+    let tol2 = tol * tol;
+    let mut stack = vec![(0usize, n - 1)];
+    while let Some((a, b)) = stack.pop() {
+        if b <= a + 1 {
+            continue;
+        }
+        let v = sub(pts[b], pts[a]);
+        let len2 = dot(v, v);
+        let mut best = None;
+        let mut best_d2 = tol2;
+        for (i, &point) in pts.iter().enumerate().take(b).skip(a + 1) {
+            let p = sub(point, pts[a]);
+            let d2 = if len2 <= 1e-24 {
+                dot(p, p)
+            } else {
+                let cr = math::cross(p, v);
+                dot(cr, cr) / len2
+            };
+            if d2 > best_d2 {
+                best_d2 = d2;
+                best = Some(i);
+            }
+        }
+        if let Some(mid) = best {
+            keep[mid] = true;
+            stack.push((a, mid));
+            stack.push((mid, b));
+        }
+    }
+    let mut dedup: Vec<V3> = Vec::new();
+    for (&p, k) in pts.iter().zip(keep) {
+        if k && dedup.last().is_none_or(|&prev| norm(sub(p, prev)) > 1e-6) {
+            dedup.push(p);
+        }
+    }
+    dedup
+}
+
 fn simplify_closed_loop(loop_pts: &[P2], tol: f64) -> Option<Vec<P2>> {
     if loop_pts.len() < 3 {
         return None;
@@ -545,7 +677,6 @@ fn simplify_closed_loop(loop_pts: &[P2], tol: f64) -> Option<Vec<P2>> {
     if second_half.len() > 2 {
         out.extend_from_slice(&second_half[1..second_half.len() - 1]);
     }
-    // Remove accidental near-coincident consecutive vertices.
     let mut dedup: Vec<P2> = Vec::with_capacity(out.len());
     for p in out {
         if dedup.last().is_none_or(|&prev| norm(sub(p, prev)) > 1e-6) {
@@ -556,6 +687,359 @@ fn simplify_closed_loop(loop_pts: &[P2], tol: f64) -> Option<Vec<P2>> {
         dedup.pop();
     }
     (dedup.len() >= 3).then_some(dedup)
+}
+
+/// Welds seam-touching 3D half-turn arcs into unbroken multi-turn spirals.
+fn weld_polylines_3d(arcs: Vec<Vec<V3>>, tol: f64) -> (Vec<Vec<V3>>, Vec<Vec<V3>>) {
+    let tol2 = tol * tol;
+    let mut pool: Vec<Option<Vec<V3>>> = arcs
+        .into_iter()
+        .filter(|a| a.len() >= 2)
+        .map(Some)
+        .collect();
+    let mut closed = Vec::new();
+    let mut open = Vec::new();
+
+    for idx in 0..pool.len() {
+        let Some(mut chain) = pool[idx].take() else {
+            continue;
+        };
+        loop {
+            let head = chain[0];
+            let tail = *chain.last().unwrap();
+            let mut best: Option<(usize, bool, bool, f64)> = None;
+            for (cand_idx, slot) in pool.iter().enumerate() {
+                let Some(cand) = slot.as_ref() else {
+                    continue;
+                };
+                let c_head = cand[0];
+                let c_tail = *cand.last().unwrap();
+                for (at_tail, rev, p, q) in [
+                    (true, false, tail, c_head),
+                    (true, true, tail, c_tail),
+                    (false, true, head, c_head),
+                    (false, false, head, c_tail),
+                ] {
+                    let d = sub(p, q);
+                    let d2 = dot(d, d);
+                    if d2 <= tol2 && best.is_none_or(|b| d2 < b.3) {
+                        best = Some((cand_idx, at_tail, rev, d2));
+                    }
+                }
+            }
+            let Some((cand_idx, at_tail, rev, _)) = best else {
+                break;
+            };
+            let mut cand = pool[cand_idx].take().unwrap();
+            if rev {
+                cand.reverse();
+            }
+            if at_tail {
+                chain.extend_from_slice(&cand[1..]);
+            } else {
+                cand.pop();
+                cand.extend(chain);
+                chain = cand;
+            }
+        }
+        if chain.len() >= 4 && norm(sub(*chain.last().unwrap(), chain[0])) <= tol {
+            chain.pop();
+            closed.push(chain);
+        } else if chain.len() >= 2 {
+            open.push(chain);
+        }
+    }
+    (closed, open)
+}
+
+fn box_corners(low: [f64; 3], high: [f64; 3]) -> [V3; 8] {
+    [
+        [low[0], low[1], low[2]],
+        [high[0], low[1], low[2]],
+        [low[0], high[1], low[2]],
+        [high[0], high[1], low[2]],
+        [low[0], low[1], high[2]],
+        [high[0], low[1], high[2]],
+        [low[0], high[1], high[2]],
+        [high[0], high[1], high[2]],
+    ]
+}
+
+#[allow(clippy::too_many_arguments)]
+fn extract_parallel_slices(
+    field: &ScalarField,
+    center: V3,
+    basis: [V3; 3],
+    z_lo: f64,
+    z_hi: f64,
+    slice_count: usize,
+    simplify_tol: f64,
+    max_r2: &mut f64,
+) -> Vec<Vec<V3>> {
+    let mut plane = vec![0.0f32; field.nx * field.ny];
+    let mut loops = Vec::new();
+    for i in 0..slice_count {
+        let w = z_lo + (i as f64 + 0.5) * (z_hi - z_lo) / slice_count as f64;
+        if w < field.oz - field.h || w > field.oz + field.nz as f64 * field.h {
+            continue;
+        }
+        plane_at(field, w, &mut plane);
+        let (raw_loops, _) =
+            marching_squares_paths(&plane, field.nx, field.ny, field.ox, field.oy, field.h);
+        for raw_loop in raw_loops {
+            let Some(simplified) = simplify_closed_loop(&raw_loop, simplify_tol) else {
+                continue;
+            };
+            let mut loop_3d = Vec::with_capacity(simplified.len());
+            for [u, v] in simplified {
+                let rel = add(add(mul(basis[0], u), mul(basis[1], v)), mul(basis[2], w));
+                *max_r2 = max_r2.max(dot(rel, rel));
+                loop_3d.push(add(center, rel));
+            }
+            loops.push(loop_3d);
+        }
+    }
+    loops
+}
+
+#[allow(clippy::too_many_arguments)]
+fn extract_crosshatch_slices(
+    field: &ScalarField,
+    center: V3,
+    basis: [V3; 3],
+    global_low: [f64; 3],
+    global_high: [f64; 3],
+    slice_count: usize,
+    hatch_angle_deg: f64,
+    simplify_tol: f64,
+    max_r2: &mut f64,
+) -> Vec<Vec<V3>> {
+    let half = 0.5 * hatch_angle_deg.to_radians();
+    let global_corners = box_corners(global_low, global_high);
+    let field_corners = box_corners(
+        [field.ox, field.oy, field.oz],
+        [
+            field.ox + (field.nx - 1) as f64 * field.h,
+            field.oy + (field.ny - 1) as f64 * field.h,
+            field.oz + (field.nz - 1) as f64 * field.h,
+        ],
+    );
+    let h = field.h;
+    let mut loops = Vec::new();
+    let mut plane = Vec::new();
+
+    for theta in [-half, half] {
+        let (st, ct) = theta.sin_cos();
+        let e0: V3 = [ct, 0.0, -st];
+        let e2: V3 = [st, 0.0, ct];
+
+        let mut s2_lo = f64::INFINITY;
+        let mut s2_hi = f64::NEG_INFINITY;
+        for c in &global_corners {
+            let p = dot(e2, *c);
+            s2_lo = s2_lo.min(p);
+            s2_hi = s2_hi.max(p);
+        }
+
+        let mut f0_lo = f64::INFINITY;
+        let mut f0_hi = f64::NEG_INFINITY;
+        let mut f2_lo = f64::INFINITY;
+        let mut f2_hi = f64::NEG_INFINITY;
+        for c in &field_corners {
+            let p0 = dot(e0, *c);
+            let p2 = dot(e2, *c);
+            f0_lo = f0_lo.min(p0);
+            f0_hi = f0_hi.max(p0);
+            f2_lo = f2_lo.min(p2);
+            f2_hi = f2_hi.max(p2);
+        }
+
+        let s0_origin = f0_lo - h;
+        let ns0 = (((f0_hi - f0_lo + 2.0 * h) / h).ceil() as usize)
+            .saturating_add(1)
+            .max(3);
+        let ns1 = field.ny;
+        let s1_origin = field.oy;
+        plane.resize(ns0 * ns1, 0.0);
+
+        for i in 0..slice_count {
+            let s2 = s2_lo + (i as f64 + 0.5) * (s2_hi - s2_lo) / slice_count as f64;
+            if s2 < f2_lo || s2 > f2_hi {
+                continue;
+            }
+            for j in 0..ns1 {
+                let v = s1_origin + j as f64 * h;
+                let row = j * ns0;
+                for col in 0..ns0 {
+                    let s0 = s0_origin + col as f64 * h;
+                    let u = s0 * ct + s2 * st;
+                    let w = -s0 * st + s2 * ct;
+                    plane[row + col] = sample_trilinear(field, u, v, w);
+                }
+            }
+            let (raw_loops, _) = marching_squares_paths(&plane, ns0, ns1, s0_origin, s1_origin, h);
+            for raw_loop in raw_loops {
+                let Some(simplified) = simplify_closed_loop(&raw_loop, simplify_tol) else {
+                    continue;
+                };
+                let mut loop_3d = Vec::with_capacity(simplified.len());
+                for [s0, v] in simplified {
+                    let u = s0 * ct + s2 * st;
+                    let w = -s0 * st + s2 * ct;
+                    let rel = add(add(mul(basis[0], u), mul(basis[1], v)), mul(basis[2], w));
+                    *max_r2 = max_r2.max(dot(rel, rel));
+                    loop_3d.push(add(center, rel));
+                }
+                loops.push(loop_3d);
+            }
+        }
+    }
+    loops
+}
+
+#[allow(clippy::too_many_arguments)]
+fn extract_spiral_surface(
+    field: &ScalarField,
+    center: V3,
+    basis: [V3; 3],
+    axis_uv: P2,
+    z_lo: f64,
+    z_hi: f64,
+    spiral_turns: f64,
+    simplify_tol: f64,
+    max_r2: &mut f64,
+) -> (Vec<Vec<V3>>, Vec<Vec<V3>>) {
+    let h = field.h;
+    let ix_mid = (((axis_uv[0] - field.ox) / h).round() as isize)
+        .clamp(1, (field.nx as isize - 2).max(1)) as usize;
+    let iy_mid = (((axis_uv[1] - field.oy) / h).floor() as isize)
+        .clamp(0, (field.ny as isize - 2).max(0)) as usize;
+    let u_c = field.ox + ix_mid as f64 * h;
+    let v_c = field.oy + (iy_mid as f64 + FRAC_1_SQRT_2) * h;
+
+    let turns = spiral_turns.max(1.0);
+    let pitch = (z_hi - z_lo) / turns;
+    let fz_min = field.oz - h;
+    let fz_max = field.oz + field.nz as f64 * h;
+
+    let right_w = |u: f64, v: f64, k: isize| -> f64 {
+        let du = (u - u_c).max(0.0);
+        let mut dv = v - v_c;
+        if du == 0.0 && dv.abs() < 1e-12 {
+            dv = 1e-12;
+        }
+        let phi = dv.atan2(du);
+        z_lo + pitch * (k as f64 + (phi + PI) / TAU)
+    };
+    let left_w = |u: f64, v: f64, k: isize| -> f64 {
+        let neg_du = (u_c - u).max(0.0);
+        let mut neg_dv = v_c - v;
+        if neg_du == 0.0 && neg_dv.abs() < 1e-12 {
+            neg_dv = -1e-12;
+        }
+        let psi = neg_dv.atan2(neg_du);
+        z_lo + pitch * (k as f64 + (psi + TAU) / TAU)
+    };
+    let to_world = |u: f64, v: f64, w: f64, max_r2: &mut f64| -> V3 {
+        let rel = add(add(mul(basis[0], u), mul(basis[1], v)), mul(basis[2], w));
+        *max_r2 = max_r2.max(dot(rel, rel));
+        add(center, rel)
+    };
+
+    let nx_r = field.nx - ix_mid;
+    let nx_l = ix_mid + 1;
+    let mut plane_r = vec![0.0f32; nx_r * field.ny];
+    let mut plane_l = vec![0.0f32; nx_l * field.ny];
+
+    let mut closed_loops_3d = Vec::new();
+    let mut raw_open_arcs_3d = Vec::new();
+    let k_max = turns.ceil() as isize;
+
+    for k in -1..=k_max {
+        let r_lo = z_lo + pitch * (k as f64 + 0.25);
+        let r_hi = z_lo + pitch * (k as f64 + 0.75);
+        if nx_r >= 2 && r_hi >= fz_min && r_lo <= fz_max {
+            for j in 0..field.ny {
+                let v = field.oy + j as f64 * h;
+                let row = j * nx_r;
+                for col in 0..nx_r {
+                    let u = u_c + col as f64 * h;
+                    let w = right_w(u, v, k);
+                    plane_r[row + col] = sample_trilinear(field, u, v, w);
+                }
+            }
+            let (loops_2d, arcs_2d) =
+                marching_squares_paths(&plane_r, nx_r, field.ny, u_c, field.oy, h);
+            for raw_loop in loops_2d {
+                if let Some(simplified) = simplify_closed_loop(&raw_loop, simplify_tol) {
+                    closed_loops_3d.push(
+                        simplified
+                            .into_iter()
+                            .map(|[u, v]| to_world(u, v, right_w(u, v, k), max_r2))
+                            .collect(),
+                    );
+                }
+            }
+            for arc in arcs_2d {
+                raw_open_arcs_3d.push(
+                    arc.into_iter()
+                        .map(|[u, v]| to_world(u, v, right_w(u, v, k), max_r2))
+                        .collect(),
+                );
+            }
+        }
+
+        let l_lo = z_lo + pitch * (k as f64 + 0.75);
+        let l_hi = z_lo + pitch * (k as f64 + 1.25);
+        if nx_l >= 2 && l_hi >= fz_min && l_lo <= fz_max {
+            for j in 0..field.ny {
+                let v = field.oy + j as f64 * h;
+                let row = j * nx_l;
+                for col in 0..nx_l {
+                    let u = field.ox + col as f64 * h;
+                    let w = left_w(u, v, k);
+                    plane_l[row + col] = sample_trilinear(field, u, v, w);
+                }
+            }
+            let (loops_2d, arcs_2d) =
+                marching_squares_paths(&plane_l, nx_l, field.ny, field.ox, field.oy, h);
+            for raw_loop in loops_2d {
+                if let Some(simplified) = simplify_closed_loop(&raw_loop, simplify_tol) {
+                    closed_loops_3d.push(
+                        simplified
+                            .into_iter()
+                            .map(|[u, v]| to_world(u, v, left_w(u, v, k), max_r2))
+                            .collect(),
+                    );
+                }
+            }
+            for arc in arcs_2d {
+                raw_open_arcs_3d.push(
+                    arc.into_iter()
+                        .map(|[u, v]| to_world(u, v, left_w(u, v, k), max_r2))
+                        .collect(),
+                );
+            }
+        }
+    }
+
+    let (welded_closed, welded_open) = weld_polylines_3d(raw_open_arcs_3d, 0.08 * h);
+    let open_tol = simplify_tol * 0.65;
+    for loop_3d in welded_closed {
+        let mut closed_ring = loop_3d;
+        closed_ring.push(closed_ring[0]);
+        let simplified = rdp_open_3d(&closed_ring, open_tol);
+        if simplified.len() >= 4 {
+            closed_loops_3d.push(simplified[..simplified.len() - 1].to_vec());
+        }
+    }
+    let polylines_3d: Vec<Vec<V3>> = welded_open
+        .into_iter()
+        .map(|poly| rdp_open_3d(&poly, open_tol))
+        .filter(|poly| poly.len() >= 2)
+        .collect();
+
+    (closed_loops_3d, polylines_3d)
 }
 
 pub(crate) fn prepare_slices(
@@ -617,8 +1101,8 @@ pub(crate) fn prepare_slices(
     let mut groups = Vec::with_capacity(by_color.len());
     let mut max_r2 = 0.0f64;
 
-    let mut global_z_min = f64::INFINITY;
-    let mut global_z_max = f64::NEG_INFINITY;
+    let mut global_low = [f64::INFINITY; 3];
+    let mut global_high = [f64::NEG_INFINITY; 3];
     let mut fields = Vec::with_capacity(by_color.len());
     for (color, atoms) in by_color {
         let field = build_field(
@@ -630,8 +1114,10 @@ pub(crate) fn prepare_slices(
             voxel_cap,
         );
         coarsened_any |= field.coarsened;
-        global_z_min = global_z_min.min(field.z_min);
-        global_z_max = global_z_max.max(field.z_max);
+        for axis in 0..3 {
+            global_low[axis] = global_low[axis].min(field.low[axis]);
+            global_high[axis] = global_high[axis].max(field.high[axis]);
+        }
         fields.push((color, field));
     }
 
@@ -642,35 +1128,69 @@ pub(crate) fn prepare_slices(
         );
     }
 
-    let z_lo = global_z_min - o.slice_probe_angstrom;
-    let z_hi = global_z_max + o.slice_probe_angstrom;
+    let pad_probe = o.slice_probe_angstrom;
+    let padded_low = [
+        global_low[0] - pad_probe,
+        global_low[1] - pad_probe,
+        global_low[2] - pad_probe,
+    ];
+    let padded_high = [
+        global_high[0] + pad_probe,
+        global_high[1] + pad_probe,
+        global_high[2] + pad_probe,
+    ];
+    let axis_uv = [
+        0.5 * (global_low[0] + global_high[0]),
+        0.5 * (global_low[1] + global_high[1]),
+    ];
 
     for (color, field) in fields {
-        let mut plane = vec![0.0f32; field.nx * field.ny];
-        let mut loops = Vec::new();
-        for i in 0..o.slice_count {
-            let w = z_lo + (i as f64 + 0.5) * (z_hi - z_lo) / o.slice_count as f64;
-            if w < field.oz - field.h || w > field.oz + field.nz as f64 * field.h {
-                continue;
-            }
-            plane_at(&field, w, &mut plane);
-            for raw_loop in
-                marching_squares(&plane, field.nx, field.ny, field.ox, field.oy, field.h)
-            {
-                let Some(simplified) = simplify_closed_loop(&raw_loop, simplify_tol) else {
-                    continue;
-                };
-                let mut loop_3d = Vec::with_capacity(simplified.len());
-                for [u, v] in simplified {
-                    let rel = add(add(mul(basis[0], u), mul(basis[1], v)), mul(basis[2], w));
-                    max_r2 = max_r2.max(dot(rel, rel));
-                    loop_3d.push(add(camera.center, rel));
-                }
-                loops.push(loop_3d);
-            }
-        }
-        if !loops.is_empty() {
-            groups.push(PreparedSliceGroup { color, loops });
+        let (loops, polylines) = match o.slice_pattern {
+            SlicePattern::Slices => (
+                extract_parallel_slices(
+                    &field,
+                    camera.center,
+                    basis,
+                    padded_low[2],
+                    padded_high[2],
+                    o.slice_count,
+                    simplify_tol,
+                    &mut max_r2,
+                ),
+                Vec::new(),
+            ),
+            SlicePattern::Crosshatch => (
+                extract_crosshatch_slices(
+                    &field,
+                    camera.center,
+                    basis,
+                    padded_low,
+                    padded_high,
+                    o.slice_count,
+                    o.slice_hatch_angle,
+                    simplify_tol,
+                    &mut max_r2,
+                ),
+                Vec::new(),
+            ),
+            SlicePattern::Spiral => extract_spiral_surface(
+                &field,
+                camera.center,
+                basis,
+                axis_uv,
+                padded_low[2],
+                padded_high[2],
+                o.slice_spiral_density,
+                simplify_tol,
+                &mut max_r2,
+            ),
+        };
+        if !loops.is_empty() || !polylines.is_empty() {
+            groups.push(PreparedSliceGroup {
+                color,
+                loops,
+                polylines,
+            });
         }
     }
 
@@ -713,7 +1233,6 @@ fn path_length(pts: &[P2]) -> f64 {
     pts.windows(2).map(|w| norm(sub(w[1], w[0]))).sum()
 }
 
-/// Outward vertex offset vectors (bounded miter `[1.0, 1.45]`).
 fn outward_normals(pts: &[P2], area: f64) -> Vec<P2> {
     let n = pts.len();
     let sign = if area >= 0.0 { 1.0 } else { -1.0 };
@@ -739,7 +1258,39 @@ fn outward_normals(pts: &[P2], area: f64) -> Vec<P2> {
         .collect()
 }
 
-/// Contiguous `true` runs `(start, len)` around a cyclic ring of length `n`.
+fn open_normals(pts: &[P2]) -> Vec<P2> {
+    let n = pts.len();
+    if n < 2 {
+        return vec![[0.0, 1.0]; n];
+    }
+    let edge_normals: Vec<P2> = (0..n - 1)
+        .map(|i| {
+            let d = sub(pts[i + 1], pts[i]);
+            let len = norm(d);
+            if len > 1e-12 {
+                [d[1] / len, -d[0] / len]
+            } else {
+                [0.0, 1.0]
+            }
+        })
+        .collect();
+    (0..n)
+        .map(|i| {
+            if i == 0 {
+                edge_normals[0]
+            } else if i == n - 1 {
+                edge_normals[n - 2]
+            } else {
+                let prev = edge_normals[i - 1];
+                let curr = edge_normals[i];
+                let bisector = math::unit(add(prev, curr), curr);
+                let proj = dot(bisector, curr).max(0.69);
+                mul(bisector, (1.0 / proj).clamp(1.0, 1.45))
+            }
+        })
+        .collect()
+}
+
 fn cyclic_runs(mask: &[bool]) -> Vec<(usize, usize)> {
     let n = mask.len();
     if n == 0 {
@@ -793,9 +1344,15 @@ pub(crate) struct WeightedPath {
     pub(crate) passes: usize,
 }
 
+pub(crate) struct ProjectedSlicePath {
+    pub(crate) points: Vec<P2>,
+    pub(crate) zs: Vec<f64>,
+    pub(crate) closed: bool,
+}
+
 pub(crate) struct ProjectedSliceGroup {
     pub(crate) color: String,
-    pub(crate) loops: Vec<(Vec<P2>, Vec<f64>)>,
+    pub(crate) paths: Vec<ProjectedSlicePath>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -944,7 +1501,6 @@ fn emit_track_passes(
                     v.push(track_pts[0]);
                     v
                 } else {
-                    // Include one bridging vertex so adjacent depth tiers connect cleanly.
                     let count = (len + 1).min(n);
                     (0..count).map(|k| track_pts[(start + k) % n]).collect()
                 }
@@ -975,45 +1531,81 @@ pub(crate) fn project_slice_groups(
     let mut low = [f64::INFINITY; 2];
     let mut high = [f64::NEG_INFINITY; 2];
 
+    let mut project_pts = |pts_3d: &[V3], closed: bool| -> ProjectedSlicePath {
+        let mut points = Vec::with_capacity(pts_3d.len());
+        let mut zs = Vec::with_capacity(pts_3d.len());
+        for &world in pts_3d {
+            let c = rotated_camera.point(world);
+            z_min = z_min.min(c[2]);
+            z_max = z_max.max(c[2]);
+            let p = if perspective {
+                let nz = (c[2] * inv_r).clamp(-1.0, 1.0);
+                let f = FOC / (FOC - nz);
+                [c[0] * f, -c[1] * f]
+            } else {
+                [c[0], -c[1]]
+            };
+            for axis in 0..2 {
+                low[axis] = low[axis].min(p[axis]);
+                high[axis] = high[axis].max(p[axis]);
+            }
+            points.push(p);
+            zs.push(c[2]);
+        }
+        ProjectedSlicePath { points, zs, closed }
+    };
+
     let groups = prepared
         .groups
         .iter()
         .map(|group| {
-            let loops = group
-                .loops
-                .iter()
-                .map(|loop_3d| {
-                    let mut pts = Vec::with_capacity(loop_3d.len());
-                    let mut zs = Vec::with_capacity(loop_3d.len());
-                    for &world in loop_3d {
-                        let c = rotated_camera.point(world);
-                        z_min = z_min.min(c[2]);
-                        z_max = z_max.max(c[2]);
-                        let p = if perspective {
-                            let nz = (c[2] * inv_r).clamp(-1.0, 1.0);
-                            let f = FOC / (FOC - nz);
-                            [c[0] * f, -c[1] * f]
-                        } else {
-                            [c[0], -c[1]]
-                        };
-                        for axis in 0..2 {
-                            low[axis] = low[axis].min(p[axis]);
-                            high[axis] = high[axis].max(p[axis]);
-                        }
-                        pts.push(p);
-                        zs.push(c[2]);
-                    }
-                    (pts, zs)
-                })
-                .collect();
+            let mut paths = Vec::with_capacity(group.loops.len() + group.polylines.len());
+            for loop_3d in &group.loops {
+                paths.push(project_pts(loop_3d, true));
+            }
+            for poly_3d in &group.polylines {
+                paths.push(project_pts(poly_3d, false));
+            }
             ProjectedSliceGroup {
                 color: group.color.clone(),
-                loops,
+                paths,
             }
         })
         .collect();
 
     (groups, [low, high], [z_min, z_max])
+}
+
+fn depth_weights(zs: Vec<f64>, z_min: f64, z_span: f64, gamma: f64, closed: bool) -> Vec<f64> {
+    let n = zs.len();
+    let mut u: Vec<f64> = zs
+        .into_iter()
+        .map(|z| {
+            let t = if z_span > 1e-9 {
+                ((z - z_min) / z_span).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            t.powf(gamma)
+        })
+        .collect();
+    if n >= 3 {
+        for _ in 0..2 {
+            let prev = u.clone();
+            if closed {
+                for i in 0..n {
+                    u[i] = 0.25 * prev[(i + n - 1) % n] + 0.5 * prev[i] + 0.25 * prev[(i + 1) % n];
+                }
+            } else {
+                for i in 0..n {
+                    u[i] = 0.25 * prev[i.saturating_sub(1)]
+                        + 0.5 * prev[i]
+                        + 0.25 * prev[(i + 1).min(n - 1)];
+                }
+            }
+        }
+    }
+    u
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1036,19 +1628,24 @@ pub(crate) fn build_weighted_slice_groups(
             .into_iter()
             .filter_map(|group| {
                 let weighted: Vec<WeightedPath> = group
-                    .loops
+                    .paths
                     .into_iter()
-                    .filter_map(|(pts, _)| {
-                        let mut closed: Vec<P2> = pts
+                    .filter_map(|path| {
+                        let mut mapped: Vec<P2> = path
+                            .points
                             .into_iter()
                             .map(|p| add(mul(sub(p, mid), scale), page_mid))
                             .collect();
-                        let first = *closed.first()?;
-                        closed.push(first);
-                        (path_length(&closed) >= MIN_LENGTH_MM).then_some(WeightedPath {
-                            points: closed,
-                            passes: 1,
-                        })
+                        if path.closed {
+                            let first = *mapped.first()?;
+                            mapped.push(first);
+                        }
+                        (mapped.len() >= 2 && path_length(&mapped) >= MIN_LENGTH_MM).then_some(
+                            WeightedPath {
+                                points: mapped,
+                                passes: 1,
+                            },
+                        )
                     })
                     .collect();
                 (!weighted.is_empty()).then_some((group.color, weighted))
@@ -1069,87 +1666,123 @@ pub(crate) fn build_weighted_slice_groups(
 
     for group in projected_groups {
         let mut weighted = Vec::new();
-        for (raw_pts, zs) in group.loops {
-            let pts: Vec<P2> = raw_pts
+        for path in group.paths {
+            let pts: Vec<P2> = path
+                .points
                 .into_iter()
                 .map(|p| add(mul(sub(p, mid), scale), page_mid))
                 .collect();
             let n = pts.len();
-            if n < 3 {
-                continue;
-            }
-            let perim = closed_perimeter(&pts);
-            if perim < MIN_LENGTH_MM {
-                continue;
-            }
-            let area = signed_area(&pts);
-            let inradius = 2.0 * area.abs() / perim.max(1e-9);
-            let normals = outward_normals(&pts, area);
 
-            let mut u: Vec<f64> = zs
-                .into_iter()
-                .map(|z| {
-                    let t = if z_span > 1e-9 {
-                        ((z - z_range[0]) / z_span).clamp(0.0, 1.0)
-                    } else {
-                        1.0
-                    };
-                    t.powf(o.slice_depth_gamma)
-                })
-                .collect();
-            for _ in 0..2 {
-                let prev = u.clone();
-                for i in 0..n {
-                    u[i] = 0.25 * prev[(i + n - 1) % n] + 0.5 * prev[i] + 0.25 * prev[(i + 1) % n];
-                }
-            }
-
-            emit_track_passes(&pts, &u, true, o.slice_max_passes, &mut weighted);
-
-            for track in 1..o.slice_max_parallel {
-                let pair = track.div_ceil(2);
-                let inward = track % 2 == 1;
-                let dist = pair as f64 * o.slice_parallel_spacing_mm;
-                if inward && (n <= 5 || dist >= 0.50 * inradius) {
+            if path.closed {
+                if n < 3 {
                     continue;
                 }
-                let signed_offset = if inward { -dist } else { dist };
-                let threshold = track as f64 / o.slice_max_parallel as f64 - 1e-9;
-                let mask: Vec<bool> = u.iter().map(|&val| val >= threshold).collect();
-                let runs = cyclic_runs(&mask);
+                let perim = closed_perimeter(&pts);
+                if perim < MIN_LENGTH_MM {
+                    continue;
+                }
+                let area = signed_area(&pts);
+                let inradius = 2.0 * area.abs() / perim.max(1e-9);
+                let normals = outward_normals(&pts, area);
+                let u = depth_weights(path.zs, z_range[0], z_span, o.slice_depth_gamma, true);
 
-                if runs.len() == 1 && runs[0].1 == n {
-                    let offset_pts: Vec<P2> = (0..n)
-                        .map(|i| add(pts[i], mul(normals[i], signed_offset)))
-                        .collect();
-                    if inward && signed_area(&offset_pts) * area <= 0.0 {
+                emit_track_passes(&pts, &u, true, o.slice_max_passes, &mut weighted);
+
+                for track in 1..o.slice_max_parallel {
+                    let pair = track.div_ceil(2);
+                    let inward = track % 2 == 1;
+                    let dist = pair as f64 * o.slice_parallel_spacing_mm;
+                    if inward && (n <= 5 || dist >= 0.50 * inradius) {
                         continue;
                     }
-                    emit_track_passes(&offset_pts, &u, true, o.slice_max_passes, &mut weighted);
-                } else {
-                    let max_unassigned = runs
-                        .iter()
-                        .map(|(_, len)| n.saturating_sub(*len) / 2)
-                        .min()
-                        .unwrap_or(0);
-                    let taper = 3.min(max_unassigned);
-                    for (start, len) in runs {
-                        let total = len + 2 * taper;
-                        if total < 2 {
+                    let signed_offset = if inward { -dist } else { dist };
+                    let threshold = track as f64 / o.slice_max_parallel as f64 - 1e-9;
+                    let mask: Vec<bool> = u.iter().map(|&val| val >= threshold).collect();
+                    let runs = cyclic_runs(&mask);
+
+                    if runs.len() == 1 && runs[0].1 == n {
+                        let offset_pts: Vec<P2> = (0..n)
+                            .map(|i| add(pts[i], mul(normals[i], signed_offset)))
+                            .collect();
+                        if inward && signed_area(&offset_pts) * area <= 0.0 {
                             continue;
                         }
-                        let begin = (start + n - taper) % n;
-                        let mut arc_pts = Vec::with_capacity(total);
-                        let mut arc_u = Vec::with_capacity(total);
-                        for k in 0..total {
-                            let idx = (begin + k) % n;
-                            let weight = if taper > 0 && k < taper {
-                                let f = (k + 1) as f64 / (taper + 1) as f64;
-                                0.5 - 0.5 * (std::f64::consts::PI * f).cos()
-                            } else if taper > 0 && k >= taper + len {
-                                let rem = total - k;
-                                let f = rem as f64 / (taper + 1) as f64;
-                                0.5 - 0.5 * (std::f64::consts::PI * f).cos()
+                        emit_track_passes(&offset_pts, &u, true, o.slice_max_passes, &mut weighted);
+                    } else {
+                        let max_unassigned = runs
+                            .iter()
+                            .map(|(_, len)| n.saturating_sub(*len) / 2)
+                            .min()
+                            .unwrap_or(0);
+                        let taper = 3.min(max_unassigned);
+                        for (start, len) in runs {
+                            let total = len + 2 * taper;
+                            if total < 2 {
+                                continue;
+                            }
+                            let begin = (start + n - taper) % n;
+                            let mut arc_pts = Vec::with_capacity(total);
+                            let mut arc_u = Vec::with_capacity(total);
+                            for k in 0..total {
+                                let idx = (begin + k) % n;
+                                let weight = if taper > 0 && k < taper {
+                                    let f = (k + 1) as f64 / (taper + 1) as f64;
+                                    0.5 - 0.5 * (PI * f).cos()
+                                } else if taper > 0 && k >= taper + len {
+                                    let rem = total - k;
+                                    let f = rem as f64 / (taper + 1) as f64;
+                                    0.5 - 0.5 * (PI * f).cos()
+                                } else {
+                                    1.0
+                                };
+                                arc_pts
+                                    .push(add(pts[idx], mul(normals[idx], signed_offset * weight)));
+                                arc_u.push(u[idx]);
+                            }
+                            emit_track_passes(
+                                &arc_pts,
+                                &arc_u,
+                                false,
+                                o.slice_max_passes,
+                                &mut weighted,
+                            );
+                        }
+                    }
+                }
+            } else {
+                if n < 2 || path_length(&pts) < MIN_LENGTH_MM {
+                    continue;
+                }
+                let normals = open_normals(&pts);
+                let u = depth_weights(path.zs, z_range[0], z_span, o.slice_depth_gamma, false);
+
+                emit_track_passes(&pts, &u, false, o.slice_max_passes, &mut weighted);
+
+                for track in 1..o.slice_max_parallel {
+                    let pair = track.div_ceil(2);
+                    let side = if track % 2 == 1 { -1.0 } else { 1.0 };
+                    let signed_offset = side * pair as f64 * o.slice_parallel_spacing_mm;
+                    let threshold = track as f64 / o.slice_max_parallel as f64 - 1e-9;
+                    let mask: Vec<bool> = u.iter().map(|&val| val >= threshold).collect();
+                    for (start, len) in linear_runs(&mask) {
+                        let left_taper = start.min(3);
+                        let right_taper = (n - (start + len)).min(3);
+                        let begin = start - left_taper;
+                        let end_excl = start + len + right_taper;
+                        if end_excl - begin < 2 {
+                            continue;
+                        }
+                        let mut arc_pts = Vec::with_capacity(end_excl - begin);
+                        let mut arc_u = Vec::with_capacity(end_excl - begin);
+                        for idx in begin..end_excl {
+                            let weight = if idx < start {
+                                let f = (idx - begin + 1) as f64 / (left_taper + 1) as f64;
+                                0.5 - 0.5 * (PI * f).cos()
+                            } else if idx >= start + len {
+                                let rem = end_excl - idx;
+                                let f = rem as f64 / (right_taper + 1) as f64;
+                                0.5 - 0.5 * (PI * f).cos()
                             } else {
                                 1.0
                             };
@@ -1282,7 +1915,13 @@ pub(crate) fn sample_preview_groups(
     groups: &[PreparedSliceGroup],
     budget: usize,
 ) -> Vec<PreparedSliceGroup> {
-    let total_pts: usize = groups.iter().flat_map(|g| &g.loops).map(Vec::len).sum();
+    let total_pts: usize = groups
+        .iter()
+        .map(|g| {
+            g.loops.iter().map(Vec::len).sum::<usize>()
+                + g.polylines.iter().map(Vec::len).sum::<usize>()
+        })
+        .sum();
     let stride = total_pts.div_ceil(budget).max(1);
     groups
         .iter()
@@ -1298,9 +1937,26 @@ pub(crate) fn sample_preview_groups(
                     (sampled.len() >= 3).then_some(sampled)
                 })
                 .collect();
-            (!loops.is_empty()).then_some(PreparedSliceGroup {
+            let polylines: Vec<Vec<V3>> = group
+                .polylines
+                .iter()
+                .filter_map(|poly_pts| {
+                    if stride == 1 || poly_pts.len() <= 4 {
+                        return Some(poly_pts.clone());
+                    }
+                    let mut sampled: Vec<V3> = poly_pts.iter().step_by(stride).copied().collect();
+                    if let Some(&last) = poly_pts.last() {
+                        if sampled.last() != Some(&last) {
+                            sampled.push(last);
+                        }
+                    }
+                    (sampled.len() >= 2).then_some(sampled)
+                })
+                .collect();
+            (!loops.is_empty() || !polylines.is_empty()).then_some(PreparedSliceGroup {
                 color: group.color.clone(),
                 loops,
+                polylines,
             })
         })
         .collect()

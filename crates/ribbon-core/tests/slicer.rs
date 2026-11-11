@@ -292,6 +292,12 @@ fn invalid_slicer_options_and_atom_radii_fail_cleanly() {
                 .chain_modes
                 .insert("unknown".into(), RenderMode::Slice);
         }),
+        Box::new(|r| r.options.slice_rotation = [f64::NAN, 0.0, 0.0]),
+        Box::new(|r| r.options.slice_rotation = [0.0, 400_000.0, 0.0]),
+        Box::new(|r| r.options.slice_hatch_angle = 4.0),
+        Box::new(|r| r.options.slice_hatch_angle = 176.0),
+        Box::new(|r| r.options.slice_spiral_density = 0.5),
+        Box::new(|r| r.options.slice_spiral_density = 165.0),
     ];
     for (i, mutate) in cases.into_iter().enumerate() {
         let mut req = slice_request();
@@ -347,4 +353,83 @@ fn hybrid_per_component_ribbon_and_slicer_align_and_cache_cleanly() {
     assert_eq!(scene["ribbons"].as_array().unwrap().len(), 1);
     assert_eq!(scene["molecules"].as_array().unwrap().len(), 1);
     assert_eq!(scene["sliceGroups"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn slice_direction_rotation_crosshatch_angle_and_spiral_density_work_and_cache() {
+    let base = slice_request();
+    let mut session = RenderSession::new(base.structure.clone()).unwrap();
+
+    // 1. Slice direction rotation steers cutting planes independently of camera rotation.
+    let (plain, _) = session.calculate(base.options.clone(), false).unwrap();
+    let mut tilted = base.clone();
+    tilted.options.slice_rotation = [32.0, -48.0, 19.0];
+    let (tilted_res, tilted_timing) = session.calculate(tilted.options.clone(), false).unwrap();
+    assert!(!tilted_timing.geometry_cache_hit);
+    assert_ne!(parse_paths(&plain.svg), parse_paths(&tilted_res.svg));
+    assert_eq!(tilted_res.svg, render(&tilted).unwrap().svg);
+
+    // Camera view rotation on a tilted slice direction still hits the 3D contour cache.
+    tilted.options.rotation = [25.0, 15.0, -10.0];
+    let (tilted_cam, cam_timing) = session.calculate(tilted.options.clone(), false).unwrap();
+    assert!(cam_timing.geometry_cache_hit);
+    assert_eq!(tilted_cam.svg, render(&tilted).unwrap().svg);
+
+    // 2. Cross-hatch slices produce two intersecting contour families and respond to angle.
+    let mut hatch60 = base.clone();
+    hatch60.options.slice_axis = SliceAxis::Y;
+    hatch60.options.slice_pattern = SlicePattern::Crosshatch;
+    hatch60.options.slice_hatch_angle = 60.0;
+    hatch60.options.slice_max_passes = 1;
+    hatch60.options.slice_max_parallel = 1;
+    let hatch60_res = render(&hatch60).unwrap();
+
+    let mut single_family = hatch60.clone();
+    single_family.options.slice_pattern = SlicePattern::Slices;
+    let single_family_res = render(&single_family).unwrap();
+    assert!(hatch60_res.stroke_count > single_family_res.stroke_count);
+    assert!(hatch60_res.length_mm > single_family_res.length_mm * 1.5);
+
+    let mut hatch110 = hatch60.clone();
+    hatch110.options.slice_hatch_angle = 110.0;
+    let hatch110_res = render(&hatch110).unwrap();
+    assert_ne!(
+        parse_paths(&hatch60_res.svg),
+        parse_paths(&hatch110_res.svg)
+    );
+
+    // 3. Spiral surface wraps open multi-turn polylines and scales with density.
+    let mut spiral_sparse = base.clone();
+    spiral_sparse.options.slice_pattern = SlicePattern::Spiral;
+    spiral_sparse.options.slice_spiral_density = 8.0;
+    spiral_sparse.options.slice_max_passes = 1;
+    spiral_sparse.options.slice_max_parallel = 1;
+    let sparse_res = render(&spiral_sparse).unwrap();
+    assert!(sparse_res.stroke_count >= 1);
+
+    let mut spiral_dense = spiral_sparse.clone();
+    spiral_dense.options.slice_spiral_density = 30.0;
+    let dense_res = render(&spiral_dense).unwrap();
+    assert!(dense_res.length_mm > sparse_res.length_mm * 2.2);
+
+    // Spiral with full overdraw + parallel companion tracks stays strictly inside page margins.
+    let mut spiral_rich = spiral_dense.clone();
+    spiral_rich.options.slice_max_passes = 4;
+    spiral_rich.options.slice_max_parallel = 3;
+    spiral_rich.options.slice_rotation = [20.0, -35.0, 0.0];
+    let (rich_res, _) = session
+        .calculate(spiral_rich.options.clone(), false)
+        .unwrap();
+    assert!(rich_res.length_mm > dense_res.length_mm * 1.5);
+    assert_eq!(rich_res.svg, render(&spiral_rich).unwrap().svg);
+    for p in parse_paths(&rich_res.svg).into_iter().flatten() {
+        assert!(p[0] >= 15.2 - 0.0002 && p[0] <= 210.0 - 15.2 + 0.0002);
+        assert!(p[1] >= 15.2 - 0.0002 && p[1] <= 297.0 - 15.2 + 0.0002);
+    }
+
+    let spiral_scene: Value = serde_json::from_str(&session.preview_scene_json().unwrap()).unwrap();
+    assert!(!spiral_scene["sliceGroups"][0]["polylines"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 }

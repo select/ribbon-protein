@@ -806,7 +806,7 @@ impl RenderSession {
                     0
                 };
             let prepared = &self.slice_prepared[index];
-            let slice_groups = slicer::sample_preview_groups(&prepared.groups, 3200);
+            let slice_groups = slicer::sample_preview_groups(&prepared.groups, 4800);
             #[derive(serde::Serialize)]
             #[serde(rename_all = "camelCase")]
             struct SliceScene {
@@ -847,7 +847,7 @@ impl RenderSession {
                     self.slice_prepared.push_front(prepared);
                     0
                 };
-            slice_groups = slicer::sample_preview_groups(&self.slice_prepared[index].groups, 2400);
+            slice_groups = slicer::sample_preview_groups(&self.slice_prepared[index].groups, 3600);
             slice_radius = Some(self.slice_prepared[index].radius);
         }
 
