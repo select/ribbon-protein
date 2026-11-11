@@ -545,3 +545,133 @@ fn spiral_starts_at_each_peak_and_connects_into_a_single_spiral_on_shared_trunk(
         "expected 2 spirals (main peak->trunk + secondary peak->saddle merge)"
     );
 }
+
+#[test]
+fn spiral_never_emits_straight_jump_chords_across_splits_or_cavities_and_zero_coarseness_is_smooth()
+{
+    // 1. Inverted-Y (1 -> 2 downward split) + outer ring enclosing a hollow cavity with a central
+    // island: neither topology may emit a long straight chord across empty space.
+    let mut atoms = Vec::new();
+    // Upper trunk (z = 2..14) splitting into two wide downward legs (z = -14..2, x = ±11).
+    for k in 0..=8 {
+        let z = 2.0 + k as f64 * 1.5;
+        atoms.push([-2.0, 0.0, z]);
+        atoms.push([2.0, 0.0, z]);
+    }
+    for k in 0..=10 {
+        let z = 2.0 - k as f64 * 1.6;
+        let sep = 2.0 + k as f64 * 0.9;
+        atoms.push([-sep, 0.0, z]);
+        atoms.push([sep, 0.0, z]);
+    }
+    // Outer ring at z = -6..4 (radius 18) with an isolated central island at [0, 0, -2] inside the cavity.
+    for a in 0..24 {
+        let theta = (a as f64 / 24.0) * std::f64::consts::TAU;
+        for z in [-5.0, -2.0, 1.0] {
+            atoms.push([18.0 * theta.cos(), 18.0 * theta.sin(), z]);
+        }
+    }
+    atoms.push([0.0, 0.0, -3.5]);
+    atoms.push([0.0, 0.0, -1.5]);
+
+    let radii = vec![2.1; atoms.len()];
+    let mut req = RenderRequest {
+        structure: StructureData {
+            name: "cavity-and-split".into(),
+            segments: vec![],
+            molecules: vec![Molecule {
+                chain_id: "m".into(),
+                label: "MOL".into(),
+                category: "molecule".into(),
+                atoms,
+                bonds: vec![],
+                radii,
+            }],
+            chain_atoms: vec![],
+            chains: vec![Chain {
+                id: "m".into(),
+                residue_count: 0,
+            }],
+            residue_count: 0,
+            warnings: vec![],
+        },
+        options: RenderOptions {
+            render_mode: RenderMode::Slice,
+            slice_axis: SliceAxis::Z,
+            slice_pattern: SlicePattern::Spiral,
+            slice_spiral_density: 28.0,
+            slice_probe_angstrom: 1.4,
+            slice_coarseness: 0,
+            slice_max_passes: 2,
+            slice_max_parallel: 3,
+            slice_parallel_spacing_mm: 0.25,
+            rotation: [24.0, -18.0, 10.0],
+            selected_chains: vec!["m".into()],
+            ..RenderOptions::default()
+        },
+    };
+
+    let mut session = RenderSession::new(req.structure.clone()).unwrap();
+    let (spiral_svg, _) = session.calculate(req.options.clone(), false).unwrap();
+    let scene: Value = serde_json::from_str(&session.preview_scene_json().unwrap()).unwrap();
+    for poly in scene["sliceGroups"][0]["polylines"].as_array().unwrap() {
+        let pts: Vec<[f64; 3]> = poly
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                let arr = p.as_array().unwrap();
+                [
+                    arr[0].as_f64().unwrap(),
+                    arr[1].as_f64().unwrap(),
+                    arr[2].as_f64().unwrap(),
+                ]
+            })
+            .collect();
+        for w in pts.windows(2) {
+            let d = ((w[1][0] - w[0][0]).powi(2)
+                + (w[1][1] - w[0][1]).powi(2)
+                + (w[1][2] - w[0][2]).powi(2))
+            .sqrt();
+            assert!(
+                d < 3.0,
+                "unexpected straight jump chord of {d:.2} Å in 3D spiral polyline"
+            );
+        }
+    }
+    for path in parse_paths(&spiral_svg.svg) {
+        for w in path.windows(2) {
+            let seg_mm = (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]);
+            assert!(
+                seg_mm < 8.0,
+                "unexpected long straight segment of {seg_mm:.2} mm in rendered spiral SVG"
+            );
+        }
+    }
+
+    // 2. Coarseness = 0 produces visibly smoother, finer-segmented contours than Coarseness = 85.
+    req.options.slice_pattern = SlicePattern::Slices;
+    req.options.slice_count = 14;
+    req.options.slice_max_passes = 1;
+    req.options.slice_max_parallel = 1;
+    req.options.slice_coarseness = 0;
+    let fine_paths = parse_paths(&render(&req).unwrap().svg);
+    let fine_pts: usize = fine_paths.iter().map(Vec::len).sum();
+    let fine_max_seg = fine_paths
+        .iter()
+        .flat_map(|p| p.windows(2))
+        .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
+        .fold(0.0f64, f64::max);
+
+    req.options.slice_coarseness = 85;
+    let coarse_paths = parse_paths(&render(&req).unwrap().svg);
+    let coarse_pts: usize = coarse_paths.iter().map(Vec::len).sum();
+    assert!(
+        fine_pts > coarse_pts * 3,
+        "coarseness=0 ({fine_pts} pts) should retain far smoother curve detail than coarseness=85 ({coarse_pts} pts)"
+    );
+    assert!(
+        fine_max_seg < 4.0,
+        "coarseness=0 should not leave coarse faceted edges (max segment was {fine_max_seg:.2} mm)"
+    );
+}

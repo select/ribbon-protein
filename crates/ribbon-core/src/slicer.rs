@@ -19,8 +19,8 @@ use std::fmt::Write;
 const BLOB: f64 = 0.55;
 const ISO: f32 = 0.19;
 const FOC: f64 = 3.4;
-const MAX_VOXELS: usize = 6_000_000;
-const PREVIEW_MAX_VOXELS: usize = 1_200_000;
+const MAX_VOXELS: usize = 10_000_000;
+const PREVIEW_MAX_VOXELS: usize = 1_500_000;
 const MIN_LENGTH_MM: f64 = 0.08;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -243,7 +243,7 @@ fn build_field(
     }
 
     let c = coarseness as f64 / 100.0;
-    let initial_h = 0.55 + 1.75 * c * c;
+    let initial_h = 0.45 + 1.85 * c * c;
     let mut h = initial_h;
     let (nx, ny, nz) = loop {
         let pad = max_cut + h;
@@ -297,7 +297,7 @@ fn build_field(
         }
     }
 
-    let blur_passes = (1.0 + 3.0 * c).round() as usize;
+    let blur_passes = (2.0 + 3.0 * c).round() as usize;
     let mut line = vec![0.0f32; nx.max(ny).max(nz)];
     for _ in 0..blur_passes {
         box_blur_3d(&mut grid, nx, ny, nz, &mut line);
@@ -565,6 +565,8 @@ fn rdp_open(pts: &[P2], tol: f64) -> Vec<P2> {
     keep[0] = true;
     keep[n - 1] = true;
     let tol2 = tol * tol;
+    let max_seg = 0.70 + 18.0 * tol;
+    let max_seg2 = max_seg * max_seg;
     let mut stack = vec![(0usize, n - 1)];
     while let Some((a, b)) = stack.pop() {
         if b <= a + 1 {
@@ -591,6 +593,11 @@ fn rdp_open(pts: &[P2], tol: f64) -> Vec<P2> {
             keep[mid] = true;
             stack.push((a, mid));
             stack.push((mid, b));
+        } else if len2 > max_seg2 {
+            let mid = (a + b) / 2;
+            keep[mid] = true;
+            stack.push((a, mid));
+            stack.push((mid, b));
         }
     }
     pts.iter()
@@ -608,6 +615,8 @@ fn rdp_open_3d(pts: &[V3], tol: f64) -> Vec<V3> {
     keep[0] = true;
     keep[n - 1] = true;
     let tol2 = tol * tol;
+    let max_seg = 0.70 + 18.0 * tol;
+    let max_seg2 = max_seg * max_seg;
     let mut stack = vec![(0usize, n - 1)];
     while let Some((a, b)) = stack.pop() {
         if b <= a + 1 {
@@ -631,6 +640,11 @@ fn rdp_open_3d(pts: &[V3], tol: f64) -> Vec<V3> {
             }
         }
         if let Some(mid) = best {
+            keep[mid] = true;
+            stack.push((a, mid));
+            stack.push((mid, b));
+        } else if len2 > max_seg2 {
+            let mid = (a + b) / 2;
             keep[mid] = true;
             stack.push((a, mid));
             stack.push((mid, b));
@@ -702,6 +716,91 @@ fn box_corners(low: [f64; 3], high: [f64; 3]) -> [V3; 8] {
     ]
 }
 
+fn smooth_closed_contour_2d(raw: &[P2], coarseness_norm: f64) -> Vec<P2> {
+    let n0 = raw.len();
+    if n0 < 4 {
+        return raw.to_vec();
+    }
+    let mut pts = raw.to_vec();
+    // Shrinkage-free Taubin fairing removes marching-squares grid-cell facets.
+    let taubin_passes = if coarseness_norm < 0.75 { 3 } else { 2 };
+    let mut tmp = vec![[0.0; 2]; n0];
+    for _ in 0..taubin_passes {
+        for i in 0..n0 {
+            let prev = pts[(i + n0 - 1) % n0];
+            let next = pts[(i + 1) % n0];
+            let avg = [0.5 * (prev[0] + next[0]), 0.5 * (prev[1] + next[1])];
+            tmp[i] = [
+                pts[i][0] + 0.33 * (avg[0] - pts[i][0]),
+                pts[i][1] + 0.33 * (avg[1] - pts[i][1]),
+            ];
+        }
+        for i in 0..n0 {
+            let prev = tmp[(i + n0 - 1) % n0];
+            let next = tmp[(i + 1) % n0];
+            let avg = [0.5 * (prev[0] + next[0]), 0.5 * (prev[1] + next[1])];
+            pts[i] = [
+                tmp[i][0] - 0.342 * (avg[0] - tmp[i][0]),
+                tmp[i][1] - 0.342 * (avg[1] - tmp[i][1]),
+            ];
+        }
+    }
+
+    // 4-point Dyn-Levin-Gregory interpolating subdivision turns piecewise-linear
+    // vertices into C1 smooth curves without shrinking small lobes.
+    let subdiv_passes = if coarseness_norm < 0.35 {
+        2
+    } else if coarseness_norm < 0.75 {
+        1
+    } else {
+        0
+    };
+    for _ in 0..subdiv_passes {
+        let m = pts.len();
+        if m > 4096 {
+            break;
+        }
+        let mut refined = Vec::with_capacity(m * 2);
+        for i in 0..m {
+            let p0 = pts[(i + m - 1) % m];
+            let p1 = pts[i];
+            let p2 = pts[(i + 1) % m];
+            let p3 = pts[(i + 2) % m];
+            refined.push(p1);
+            refined.push([
+                (-p0[0] + 9.0 * p1[0] + 9.0 * p2[0] - p3[0]) * (1.0 / 16.0),
+                (-p0[1] + 9.0 * p1[1] + 9.0 * p2[1] - p3[1]) * (1.0 / 16.0),
+            ]);
+        }
+        pts = refined;
+    }
+    pts
+}
+
+fn smooth_open_polyline_3d(pts: &[V3], passes: usize) -> Vec<V3> {
+    let n = pts.len();
+    if n < 4 || passes == 0 {
+        return pts.to_vec();
+    }
+    let mut cur = pts.to_vec();
+    let mut tmp = cur.clone();
+    for _ in 0..passes {
+        tmp[0] = cur[0];
+        tmp[n - 1] = cur[n - 1];
+        for i in 1..n - 1 {
+            let avg = mul(add(cur[i - 1], cur[i + 1]), 0.5);
+            tmp[i] = add(cur[i], mul(sub(avg, cur[i]), 0.32));
+        }
+        cur[0] = tmp[0];
+        cur[n - 1] = tmp[n - 1];
+        for i in 1..n - 1 {
+            let avg = mul(add(tmp[i - 1], tmp[i + 1]), 0.5);
+            cur[i] = add(tmp[i], mul(sub(avg, tmp[i]), -0.332));
+        }
+    }
+    cur
+}
+
 #[allow(clippy::too_many_arguments)]
 fn extract_parallel_slices(
     field: &ScalarField,
@@ -710,6 +809,7 @@ fn extract_parallel_slices(
     z_lo: f64,
     z_hi: f64,
     slice_count: usize,
+    coarseness_norm: f64,
     simplify_tol: f64,
     max_r2: &mut f64,
 ) -> Vec<Vec<V3>> {
@@ -724,7 +824,8 @@ fn extract_parallel_slices(
         let (raw_loops, _) =
             marching_squares_paths(&plane, field.nx, field.ny, field.ox, field.oy, field.h);
         for raw_loop in raw_loops {
-            let Some(simplified) = simplify_closed_loop(&raw_loop, simplify_tol) else {
+            let faired = smooth_closed_contour_2d(&raw_loop, coarseness_norm);
+            let Some(simplified) = simplify_closed_loop(&faired, simplify_tol) else {
                 continue;
             };
             let mut loop_3d = Vec::with_capacity(simplified.len());
@@ -748,6 +849,7 @@ fn extract_crosshatch_slices(
     global_high: [f64; 3],
     slice_count: usize,
     hatch_angle_deg: f64,
+    coarseness_norm: f64,
     simplify_tol: f64,
     max_r2: &mut f64,
 ) -> Vec<Vec<V3>> {
@@ -816,7 +918,8 @@ fn extract_crosshatch_slices(
             }
             let (raw_loops, _) = marching_squares_paths(&plane, ns0, ns1, s0_origin, s1_origin, h);
             for raw_loop in raw_loops {
-                let Some(simplified) = simplify_closed_loop(&raw_loop, simplify_tol) else {
+                let faired = smooth_closed_contour_2d(&raw_loop, coarseness_norm);
+                let Some(simplified) = simplify_closed_loop(&faired, simplify_tol) else {
                     continue;
                 };
                 let mut loop_3d = Vec::with_capacity(simplified.len());
@@ -834,7 +937,8 @@ fn extract_crosshatch_slices(
     loops
 }
 
-const N_RING: usize = 128;
+const N_RING: usize = 512;
+const N_PROBES: usize = 32;
 
 fn point_in_poly(pt: P2, poly: &[P2]) -> bool {
     let mut inside = false;
@@ -883,6 +987,21 @@ fn closest_point_on_closed_poly(poly: &[P2], target: P2) -> (usize, f64, P2) {
         }
     }
     (best_i, best_t, best_p)
+}
+
+fn catmull_rom_p2(p0: P2, p1: P2, p2: P2, p3: P2, t: f64) -> P2 {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    [
+        0.5 * ((2.0 * p1[0])
+            + (-p0[0] + p2[0]) * t
+            + (2.0 * p0[0] - 5.0 * p1[0] + 4.0 * p2[0] - p3[0]) * t2
+            + (-p0[0] + 3.0 * p1[0] - 3.0 * p2[0] + p3[0]) * t3),
+        0.5 * ((2.0 * p1[1])
+            + (-p0[1] + p2[1]) * t
+            + (2.0 * p0[1] - 5.0 * p1[1] + 4.0 * p2[1] - p3[1]) * t2
+            + (-p0[1] + 3.0 * p1[1] - 3.0 * p2[1] + p3[1]) * t3),
+    ]
 }
 
 fn resample_ccw_ring(raw: &[P2], start_hint: Option<P2>) -> [P2; N_RING] {
@@ -949,9 +1068,68 @@ fn resample_ccw_ring(raw: &[P2], start_hint: Option<P2>) -> [P2; N_RING] {
 
 fn sample_ring(ring: &[P2; N_RING], frac: f64) -> P2 {
     let f = frac.rem_euclid(1.0) * N_RING as f64;
-    let i = (f.floor() as usize) % N_RING;
+    let i1 = (f.floor() as usize) % N_RING;
     let t = f - f.floor();
-    lerp(ring[i], ring[(i + 1) % N_RING], t)
+    let i0 = (i1 + N_RING - 1) % N_RING;
+    let i2 = (i1 + 1) % N_RING;
+    let i3 = (i1 + 2) % N_RING;
+    catmull_rom_p2(ring[i0], ring[i1], ring[i2], ring[i3], t)
+}
+
+/// Aligns `candidate` to `prev` by minimizing whole-ring L2 distance across all cyclic shifts
+/// (plus parabolic sub-sample refinement), eliminating single-point seam jumps on concave bays.
+fn align_ring_to_prev(candidate: &[P2; N_RING], prev: &[P2; N_RING]) -> [P2; N_RING] {
+    let ring_cost = |shift: usize, stride: usize| -> f64 {
+        let mut sum = 0.0f64;
+        let mut i = 0usize;
+        while i < N_RING {
+            let d = sub(candidate[(i + shift) % N_RING], prev[i]);
+            sum += dot(d, d);
+            i += stride;
+        }
+        sum
+    };
+
+    let mut best_coarse = 0usize;
+    let mut best_coarse_cost = f64::INFINITY;
+    for shift in (0..N_RING).step_by(8) {
+        let cost = ring_cost(shift, 8);
+        if cost < best_coarse_cost {
+            best_coarse_cost = cost;
+            best_coarse = shift;
+        }
+    }
+
+    let mut best = best_coarse;
+    let mut best_cost = f64::INFINITY;
+    for off in -8isize..=8isize {
+        let shift = (best_coarse as isize + off).rem_euclid(N_RING as isize) as usize;
+        let cost = ring_cost(shift, 4);
+        if cost < best_cost {
+            best_cost = cost;
+            best = shift;
+        }
+    }
+
+    let c_minus = ring_cost((best + N_RING - 1) % N_RING, 2);
+    let c_zero = ring_cost(best, 2);
+    let c_plus = ring_cost((best + 1) % N_RING, 2);
+    let denom = c_minus - 2.0 * c_zero + c_plus;
+    let delta = if denom > 1e-12 {
+        (0.5 * (c_minus - c_plus) / denom).clamp(-0.5, 0.5)
+    } else {
+        0.0
+    };
+
+    if best == 0 && delta.abs() < 1e-4 {
+        return *candidate;
+    }
+    let mut aligned = [[0.0; 2]; N_RING];
+    for (i, slot) in aligned.iter_mut().enumerate() {
+        let frac = (i as f64 + best as f64 + delta) / N_RING as f64;
+        *slot = sample_ring(candidate, frac);
+    }
+    aligned
 }
 
 fn closest_frac_on_ring(ring: &[P2; N_RING], target: P2) -> f64 {
@@ -1008,9 +1186,10 @@ fn find_extremum_tip(
 struct ContourNode {
     w: f64,
     raw: Vec<P2>,
+    perim: f64,
     low: P2,
     high: P2,
-    probes: [P2; 8],
+    probes: [P2; N_PROBES],
     parents: Vec<usize>,
     children: Vec<usize>,
 }
@@ -1050,9 +1229,15 @@ impl SpiralBranch {
         } else {
             0.0
         };
-        let p0 = sample_ring(&self.rings[idx], frac);
-        let p1 = sample_ring(&self.rings[idx + 1], frac);
-        let uv = lerp(p0, p1, alpha);
+        let p1 = sample_ring(&self.rings[idx], frac);
+        let p2 = sample_ring(&self.rings[idx + 1], frac);
+        let uv = if m >= 4 && idx >= 1 && idx + 2 < m {
+            let p0 = sample_ring(&self.rings[idx - 1], frac);
+            let p3 = sample_ring(&self.rings[idx + 2], frac);
+            catmull_rom_p2(p0, p1, p2, p3, alpha)
+        } else {
+            lerp(p1, p2, alpha)
+        };
         // Smooth dome profile right at summit and nadir caps so poles are rounded, not conical.
         let w_alpha = if idx == 0 && self.has_peak_cap {
             alpha * alpha
@@ -1066,35 +1251,118 @@ impl SpiralBranch {
     }
 }
 
-fn contours_overlap(a: &ContourNode, b: &ContourNode, pad: f64) -> bool {
-    if a.high[0] + pad < b.low[0]
-        || b.high[0] + pad < a.low[0]
-        || a.high[1] + pad < b.low[1]
-        || b.high[1] + pad < a.low[1]
+fn valid_surface_bridge(
+    field: &ScalarField,
+    uv_a: P2,
+    w_a: f64,
+    uv_b: P2,
+    w_b: f64,
+    max_dist_3d: f64,
+    min_field: f32,
+) -> bool {
+    let duv = sub(uv_b, uv_a);
+    let dw = w_b - w_a;
+    if dot(duv, duv) + dw * dw > max_dist_3d * max_dist_3d {
+        return false;
+    }
+    for t in [0.25, 0.5, 0.75] {
+        let uv = lerp(uv_a, uv_b, t);
+        let w = w_a + t * dw;
+        if sample_trilinear(field, uv[0], uv[1], w) < min_field {
+            return false;
+        }
+    }
+    true
+}
+
+/// Connects two outer contours on adjacent slices only if their boundaries are genuinely close
+/// in 3D AND the shortest bridge between them stays inside/on the scalar field — preventing
+/// inner islands inside hollow cavities from falsely linking to enclosing outer walls.
+fn contours_touch_on_surface(field: &ScalarField, a: &ContourNode, b: &ContourNode) -> bool {
+    let h = field.h;
+    let near_tip = a.perim < 5.0 * h || b.perim < 5.0 * h;
+    let max_xy = if near_tip { 3.2 * h } else { 2.3 * h };
+    if a.high[0] + max_xy < b.low[0]
+        || b.high[0] + max_xy < a.low[0]
+        || a.high[1] + max_xy < b.low[1]
+        || b.high[1] + max_xy < a.low[1]
     {
         return false;
     }
-    if a.probes.iter().any(|&p| point_in_poly(p, &b.raw))
-        || b.probes.iter().any(|&p| point_in_poly(p, &a.raw))
-    {
-        return true;
-    }
-    let pad2 = pad * pad;
+
+    let mut best_pa = a.probes[0];
+    let mut best_pb = b.probes[0];
+    let mut best_d2 = f64::INFINITY;
     for &pa in &a.probes {
         for &pb in &b.probes {
             let d = sub(pa, pb);
-            if dot(d, d) <= pad2 {
-                return true;
+            let d2 = dot(d, d);
+            if d2 < best_d2 {
+                best_d2 = d2;
+                best_pa = pa;
+                best_pb = pb;
             }
         }
     }
-    false
+    let (_, _, refined_b) = closest_point_on_closed_poly(&b.raw, best_pa);
+    let (_, _, refined_a) = closest_point_on_closed_poly(&a.raw, refined_b);
+    let (_, _, final_b) = closest_point_on_closed_poly(&b.raw, refined_a);
+    let _ = best_pb;
+
+    let max_3d = if near_tip { 3.4 * h } else { 2.5 * h };
+    valid_surface_bridge(field, refined_a, a.w, final_b, b.w, max_3d, 0.55 * ISO)
+}
+
+fn split_discontinuous_polyline(
+    poly: Vec<V3>,
+    field: &ScalarField,
+    center: V3,
+    basis: [V3; 3],
+    max_step: f64,
+) -> Vec<Vec<V3>> {
+    if poly.len() < 2 {
+        return Vec::new();
+    }
+    let mut out: Vec<Vec<V3>> = Vec::new();
+    let mut cur: Vec<V3> = vec![poly[0]];
+    for &pt in &poly[1..] {
+        let prev = *cur.last().unwrap();
+        let step_len = norm(sub(pt, prev));
+        let mut continuous = step_len <= max_step;
+        if continuous && step_len > 0.35 * field.h {
+            for t in [0.25, 0.5, 0.75] {
+                let mid = lerp(prev, pt, t);
+                let rel = sub(mid, center);
+                let u = dot(basis[0], rel);
+                let v = dot(basis[1], rel);
+                let w = dot(basis[2], rel);
+                if sample_trilinear(field, u, v, w) < 0.30 * ISO {
+                    continuous = false;
+                    break;
+                }
+            }
+        }
+        if continuous {
+            if step_len > 1e-6 {
+                cur.push(pt);
+            }
+        } else {
+            if cur.len() >= 2 {
+                out.push(cur);
+            }
+            cur = vec![pt];
+        }
+    }
+    if cur.len() >= 2 {
+        out.push(cur);
+    }
+    out
 }
 
 /// Multi-peak Reeb-tree geodesic surface spiral:
 /// starts at each 3D surface peak, winds down at constant 3D surface spacing,
 /// and merges secondary peak spirals tangentially into a single spiral on
-/// shared trunk regions.
+/// shared trunk regions without crossing empty cavities or jumping across splits.
 #[allow(clippy::too_many_arguments)]
 fn extract_spiral_surface(
     field: &ScalarField,
@@ -1104,15 +1372,16 @@ fn extract_spiral_surface(
     z_lo: f64,
     z_hi: f64,
     spiral_turns: f64,
+    coarseness_norm: f64,
     simplify_tol: f64,
     max_r2: &mut f64,
 ) -> (Vec<Vec<V3>>, Vec<Vec<V3>>) {
     let h = field.h;
     let turns = spiral_turns.max(1.0);
     let span_z = (z_hi - z_lo).max(1e-6);
-    let n_slices = ((turns * 10.0).ceil() as usize)
-        .max((span_z / (0.28 * h)).ceil() as usize)
-        .clamp(48, 720);
+    let n_slices = ((turns * 12.0).ceil() as usize)
+        .max((span_z / (0.24 * h)).ceil() as usize)
+        .clamp(56, 800);
     let dw = span_z / n_slices as f64;
     let fz_min = field.oz - h;
     let fz_max = field.oz + field.nz as f64 * h;
@@ -1132,25 +1401,14 @@ fn extract_spiral_surface(
             marching_squares_paths(&plane, field.nx, field.ny, field.ox, field.oy, h);
 
         let mut curr_slice_nodes = Vec::new();
-        for mut raw in raw_loops {
-            let area = signed_area(&raw);
+        for raw_ms in raw_loops {
+            let area = signed_area(&raw_ms);
+            let perim = closed_perimeter(&raw_ms);
             // Outer surface contours are CCW (area > 0); skip tiny sub-voxel specks and internal cavities.
-            if area <= 0.0 || closed_perimeter(&raw) < 0.45 * h {
+            if area <= 0.0 || perim < 0.45 * h {
                 continue;
             }
-            if raw.len() >= 6 {
-                let n_raw = raw.len();
-                let prev_raw = raw.clone();
-                for k in 0..n_raw {
-                    let a = prev_raw[(k + n_raw - 1) % n_raw];
-                    let b = prev_raw[k];
-                    let c = prev_raw[(k + 1) % n_raw];
-                    raw[k] = [
-                        0.2 * a[0] + 0.6 * b[0] + 0.2 * c[0],
-                        0.2 * a[1] + 0.6 * b[1] + 0.2 * c[1],
-                    ];
-                }
-            }
+            let raw = smooth_closed_contour_2d(&raw_ms, coarseness_norm);
             let mut low = [f64::INFINITY; 2];
             let mut high = [f64::NEG_INFINITY; 2];
             for &p in &raw {
@@ -1160,11 +1418,12 @@ fn extract_spiral_surface(
                 high[1] = high[1].max(p[1]);
             }
             let ring_probe = resample_ccw_ring(&raw, None);
-            let probes = std::array::from_fn(|k| ring_probe[k * (N_RING / 8)]);
+            let probes = std::array::from_fn(|k| ring_probe[k * (N_RING / N_PROBES)]);
             let id = nodes.len();
             nodes.push(ContourNode {
                 w,
                 raw,
+                perim,
                 low,
                 high,
                 probes,
@@ -1174,10 +1433,9 @@ fn extract_spiral_surface(
             curr_slice_nodes.push(id);
         }
 
-        let overlap_pad = 0.85 * h;
         for &p_id in &prev_slice_nodes {
             for &c_id in &curr_slice_nodes {
-                if contours_overlap(&nodes[p_id], &nodes[c_id], overlap_pad) {
+                if contours_touch_on_surface(field, &nodes[p_id], &nodes[c_id]) {
                     nodes[p_id].children.push(c_id);
                     nodes[c_id].parents.push(p_id);
                 }
@@ -1249,7 +1507,7 @@ fn extract_spiral_surface(
         branch.children = c_branches;
     }
 
-    // Preliminary surface length estimate per branch (bottom-up + top-down) to pick global pitch & main trunks.
+    // Preliminary surface length estimate per branch (bottom-up + top-down) to pick global pitch.
     let mut prelim_len = vec![0.0f64; branches.len()];
     for (b_id, branch) in branches.iter().enumerate() {
         let mut s = 0.0f64;
@@ -1260,24 +1518,27 @@ fn extract_spiral_surface(
             let (tip_uv, tip_w) = find_extremum_tip(field, &n0.raw, n0.low, n0.high, n0.w, dw);
             let mean_r2: f64 = prev_r
                 .iter()
+                .step_by(4)
                 .map(|&p| {
                     let d = sub(p, tip_uv);
                     dot(d, d) + (tip_w - prev_w).powi(2)
                 })
                 .sum::<f64>()
-                / N_RING as f64;
+                / (N_RING / 4) as f64;
             s += mean_r2.sqrt();
         }
         for &nid in &branch.nodes[1..] {
-            let next_r = resample_ccw_ring(&nodes[nid].raw, Some(prev_r[0]));
+            let cand = resample_ccw_ring(&nodes[nid].raw, None);
+            let next_r = align_ring_to_prev(&cand, &prev_r);
             let dz = prev_w - nodes[nid].w;
             let mean_d2: f64 = (0..N_RING)
+                .step_by(4)
                 .map(|i| {
                     let d = sub(next_r[i], prev_r[i]);
                     dot(d, d) + dz * dz
                 })
                 .sum::<f64>()
-                / N_RING as f64;
+                / (N_RING / 4) as f64;
             s += mean_d2.sqrt();
             prev_r = next_r;
             prev_w = nodes[nid].w;
@@ -1287,19 +1548,18 @@ fn extract_spiral_surface(
             let (tip_uv, tip_w) = find_extremum_tip(field, &nl.raw, nl.low, nl.high, nl.w, -dw);
             let mean_r2: f64 = prev_r
                 .iter()
+                .step_by(4)
                 .map(|&p| {
                     let d = sub(p, tip_uv);
                     dot(d, d) + (prev_w - tip_w).powi(2)
                 })
                 .sum::<f64>()
-                / N_RING as f64;
+                / (N_RING / 4) as f64;
             s += mean_r2.sqrt();
         }
         prelim_len[b_id] = s;
     }
 
-    // Topological sort (branches are naturally created in increasing start_id / decreasing w order,
-    // verify Kahn's order to guarantee every parent precedes every child).
     let mut in_deg: Vec<usize> = branches.iter().map(|b| b.parents.len()).collect();
     let mut topo = Vec::with_capacity(branches.len());
     let mut ready: Vec<usize> = (0..branches.len()).filter(|&b| in_deg[b] == 0).collect();
@@ -1339,16 +1599,6 @@ fn extract_spiral_surface(
         .max(span_z);
     let step_pitch = (max_surface_span / turns).max(0.25 * h);
 
-    let primary_child: Vec<Option<usize>> = (0..branches.len())
-        .map(|b| {
-            branches[b]
-                .children
-                .iter()
-                .copied()
-                .max_by(|&a, &c| downstream[a].total_cmp(&downstream[c]))
-        })
-        .collect();
-
     let to_world = |uv: P2, w: f64, max_r2: &mut f64| -> V3 {
         let rel = add(
             add(mul(basis[0], uv[0]), mul(basis[1], uv[1])),
@@ -1361,7 +1611,8 @@ fn extract_spiral_surface(
     let mut polylines: Vec<Vec<V3>> = Vec::new();
     let mut branch_poly: Vec<Option<usize>> = vec![None; branches.len()];
     let mut branch_end_uv: Vec<P2> = vec![[0.0, 0.0]; branches.len()];
-    let mut branch_end_phase: Vec<f64> = vec![0.0; branches.len()];
+    let mut branch_end_w: Vec<f64> = vec![0.0; branches.len()];
+    let mut branch_claimed_child: Vec<Option<usize>> = vec![None; branches.len()];
 
     for &b_id in &topo {
         // Filter microscopic atomic-ripple bumps (< 14% of a turn) that immediately merge.
@@ -1379,10 +1630,12 @@ fn extract_spiral_surface(
             .filter(|&p| branch_poly[p].is_some())
             .collect();
 
+        let first_node_id = branches[b_id].nodes[0];
+
         // At a multi-peak saddle merge, trim any parent tail that curved into the inner saddle
         // valley back (< 1 turn) to where it hugs the shared outer flank with CCW alignment.
         if active_parents.len() >= 2 {
-            let mut merged_ccw = nodes[branches[b_id].nodes[0]].raw.clone();
+            let mut merged_ccw = nodes[first_node_id].raw.clone();
             if signed_area(&merged_ccw) < 0.0 {
                 merged_ccw.reverse();
             }
@@ -1395,10 +1648,10 @@ fn extract_spiral_surface(
                     continue;
                 }
                 let (_, _, near_tail) = closest_point_on_closed_poly(&merged_ccw, branch_end_uv[p]);
-                if norm(sub(branch_end_uv[p], near_tail)) <= 0.9 * h {
+                if norm(sub(branch_end_uv[p], near_tail)) <= 0.85 * h {
                     continue;
                 }
-                let lookback = poly.len().saturating_sub(64).max(2);
+                let lookback = poly.len().saturating_sub(140).max(2);
                 let mut best_idx = poly.len() - 1;
                 let mut best_d2 = f64::INFINITY;
                 for idx in (lookback..poly.len()).rev() {
@@ -1417,34 +1670,125 @@ fn extract_spiral_surface(
                     if d2 < best_d2 {
                         best_d2 = d2;
                         best_idx = idx;
-                        if d2 <= (0.65 * h) * (0.65 * h) {
+                        if d2 <= (0.60 * h) * (0.60 * h) {
                             break;
                         }
                     }
                 }
-                if best_idx + 1 < poly.len() {
+                if best_idx + 1 < poly.len() && best_d2 <= (2.4 * h) * (2.4 * h) {
                     poly.truncate(best_idx + 1);
                     let rel = sub(*poly.last().unwrap(), center);
                     branch_end_uv[p] = [dot(basis[0], rel), dot(basis[1], rel)];
+                    branch_end_w[p] = dot(basis[2], rel);
                 }
             }
         }
 
+        // Only continue parent `p` onto `b_id` if `p`'s spiral actually ended on `b_id`'s lobe
+        // (closest child of `p` AND valid short bridge across the surface).
         let continuing_parent = active_parents
             .iter()
             .copied()
-            .filter(|&p| primary_child[p] == Some(b_id))
+            .filter(|&p| {
+                if branch_claimed_child[p].is_some() {
+                    return false;
+                }
+                let p_uv = branch_end_uv[p];
+                let p_w = branch_end_w[p];
+                let (_, _, near_b) = closest_point_on_closed_poly(&nodes[first_node_id].raw, p_uv);
+                if !valid_surface_bridge(
+                    field,
+                    p_uv,
+                    p_w,
+                    near_b,
+                    nodes[first_node_id].w,
+                    2.2 * h,
+                    0.45 * ISO,
+                ) {
+                    return false;
+                }
+                let d_self = dot(sub(near_b, p_uv), sub(near_b, p_uv));
+                branches[p].children.iter().all(|&sib| {
+                    if sib == b_id {
+                        return true;
+                    }
+                    let (_, _, near_sib) =
+                        closest_point_on_closed_poly(&nodes[branches[sib].nodes[0]].raw, p_uv);
+                    let d_sib = dot(sub(near_sib, p_uv), sub(near_sib, p_uv));
+                    d_self <= d_sib + 1e-9
+                })
+            })
             .max_by(|&a, &c| upstream[a].total_cmp(&upstream[c]));
 
-        // Build aligned rings + exact 3D surface cumulative arc-length for branch b_id.
+        if let Some(p_main) = continuing_parent {
+            branch_claimed_child[p_main] = Some(b_id);
+        }
+
+        // For a non-continuing split child, look back (< 1.1 turns) along a parent's traced
+        // polyline for a point that already swept past `b_id`'s lobe on the surface.
+        let mut split_graft: Option<(V3, V3, P2)> = None;
+        if continuing_parent.is_none() && !active_parents.is_empty() {
+            let mut b_ccw = nodes[first_node_id].raw.clone();
+            if signed_area(&b_ccw) < 0.0 {
+                b_ccw.reverse();
+            }
+            for &p_split in &active_parents {
+                let Some(p_pid) = branch_poly[p_split] else {
+                    continue;
+                };
+                let p_poly = &polylines[p_pid];
+                if p_poly.len() < 4 {
+                    continue;
+                }
+                let lookback = p_poly.len().saturating_sub(160).max(1);
+                let mut best: Option<(usize, P2, f64)> = None;
+                for idx in (lookback..p_poly.len()).rev() {
+                    let rel = sub(p_poly[idx], center);
+                    let uv = [dot(basis[0], rel), dot(basis[1], rel)];
+                    let w = dot(basis[2], rel);
+                    if w < nodes[first_node_id].w - 0.5 * h || w > nodes[first_node_id].w + 2.6 * h
+                    {
+                        continue;
+                    }
+                    let prev_rel = sub(p_poly[idx - 1], center);
+                    let prev_uv = [dot(basis[0], prev_rel), dot(basis[1], prev_rel)];
+                    let dir_uv = sub(uv, prev_uv);
+                    let (ei, _, proj_b) = closest_point_on_closed_poly(&b_ccw, uv);
+                    let edge_dir = sub(b_ccw[(ei + 1) % b_ccw.len()], b_ccw[ei]);
+                    if dot(dir_uv, edge_dir) <= 0.0 {
+                        continue;
+                    }
+                    if !valid_surface_bridge(
+                        field,
+                        uv,
+                        w,
+                        proj_b,
+                        nodes[first_node_id].w,
+                        2.3 * h,
+                        0.45 * ISO,
+                    ) {
+                        continue;
+                    }
+                    let d2 = dot(sub(uv, proj_b), sub(uv, proj_b))
+                        + (w - nodes[first_node_id].w).powi(2);
+                    if best.is_none_or(|(_, _, bd2)| d2 < bd2) {
+                        best = Some((idx, proj_b, d2));
+                    }
+                }
+                if let Some((idx, proj_b, _)) = best {
+                    let p0_world = p_poly[idx];
+                    let prev_world = p_poly[idx - 1];
+                    let tan_world = math::unit(sub(p0_world, prev_world), basis[0]);
+                    split_graft = Some((p0_world, tan_world, proj_b));
+                    break;
+                }
+            }
+        }
+
         let start_hint = if let Some(p_main) = continuing_parent {
             Some(branch_end_uv[p_main])
-        } else if let Some(&p_split) = active_parents.first() {
-            // Secondary child of a downward split: align ring[0] closest to parent's last contour.
-            let p_last = branches[p_split].rings.last().unwrap();
-            let probe = nodes[branches[b_id].nodes[0]].probes[0];
-            let frac = closest_frac_on_ring(p_last, probe);
-            Some(sample_ring(p_last, frac))
+        } else if let Some((_, _, proj_b)) = split_graft {
+            Some(proj_b)
         } else {
             None
         };
@@ -1454,7 +1798,7 @@ fn extract_spiral_surface(
         let has_peak_cap = active_parents.is_empty();
         let has_nadir_cap = branches[b_id].children.is_empty();
 
-        let first_n = &nodes[branches[b_id].nodes[0]];
+        let first_n = &nodes[first_node_id];
         let first_ring = resample_ccw_ring(&first_n.raw, start_hint);
         if has_peak_cap {
             let (tip_uv, tip_w) = find_extremum_tip(
@@ -1472,8 +1816,9 @@ fn extract_spiral_surface(
         ws.push(first_n.w);
 
         for &nid in &branches[b_id].nodes[1..] {
-            let prev0 = rings.last().unwrap()[0];
-            rings.push(resample_ccw_ring(&nodes[nid].raw, Some(prev0)));
+            let cand = resample_ccw_ring(&nodes[nid].raw, None);
+            let aligned = align_ring_to_prev(&cand, rings.last().unwrap());
+            rings.push(aligned);
             ws.push(nodes[nid].w);
         }
 
@@ -1485,7 +1830,6 @@ fn extract_spiral_surface(
             ws.push(tip_w);
         }
 
-        // Bridge vertical step from continuing parent so S includes the saddle transition.
         let mut s_cum = Vec::with_capacity(rings.len());
         s_cum.push(0.0);
         for k in 1..rings.len() {
@@ -1507,59 +1851,147 @@ fn extract_spiral_surface(
         branches[b_id].has_nadir_cap = has_nadir_cap;
 
         let s_total = branches[b_id].total_s();
-        let ds_sample = (step_pitch / 96.0).clamp(0.02 * h, 0.30 * h);
+        let max_branch_perim = branches[b_id]
+            .nodes
+            .iter()
+            .map(|&nid| nodes[nid].perim)
+            .fold(h, f64::max);
+        let samples_per_turn = (max_branch_perim / (0.30 * h)).clamp(160.0, 960.0);
+        let ds_sample = (step_pitch / samples_per_turn).clamp(0.004 * h, 0.18 * h);
         let n_steps = ((s_total / ds_sample).ceil() as usize).max(2);
 
-        // Determine polyline ownership & initial phase.
-        let (poly_idx, phase0) = if let Some(p_main) = continuing_parent {
+        let mut start_s = 0.0f64;
+        let poly_idx = if let Some(p_main) = continuing_parent {
             let pid = branch_poly[p_main].unwrap();
-            (pid, 0.0)
-        } else if let Some(&p_split) = active_parents.first() {
-            // Secondary child leg at a downward split: detach tangentially from p_split's last turn!
-            let pid = polylines.len();
-            let mut split_pts = Vec::new();
-            let target_uv = branches[b_id].rings[0][0];
-            let p_branch = &branches[p_split];
-            let p_s_end = p_branch.total_s();
-            let frac_end = branch_end_phase[p_split].rem_euclid(1.0);
-            let frac_target = closest_frac_on_ring(p_branch.rings.last().unwrap(), target_uv);
-            // Walk back up to < 1 turn on p_split to find where p_split's spiral passed frac_target - 0.25.
-            let d_frac = 0.28f64;
-            let detach_frac = (frac_target - d_frac).rem_euclid(1.0);
-            let back_turns = (frac_end - detach_frac).rem_euclid(1.0) + d_frac;
-            let s_start = (p_s_end - back_turns * step_pitch).max(0.0);
-            if p_s_end > s_start + 1e-6 {
-                let m_slope = d_frac * step_pitch;
-                let detach_steps = 22usize;
-                for k in 0..=detach_steps {
-                    let u = k as f64 / detach_steps as f64;
-                    let u2 = u * u;
-                    let u3 = u2 * u;
-                    let h_s = (2.0 * u3 - 3.0 * u2 + 1.0) * s_start
-                        + (u3 - 2.0 * u2 + u) * m_slope
-                        + (-2.0 * u3 + 3.0 * u2) * p_s_end
-                        + (u3 - u2) * m_slope;
-                    let f = detach_frac + u * d_frac;
-                    let (uv, w) = p_branch.eval_at(h_s, f);
-                    split_pts.push(to_world(uv, w, max_r2));
+            if polylines[pid].len() >= 2 && s_total > 1e-5 {
+                let p0_world = *polylines[pid].last().unwrap();
+                let (uv0, w0) = branches[b_id].eval_at(0.0, 0.0);
+                let b0_world = to_world(uv0, w0, max_r2);
+                if norm(sub(b0_world, p0_world)) > 0.18 * h {
+                    let join_s = (0.14 * step_pitch).min(0.45 * s_total);
+                    if join_s > 1e-5 {
+                        let prev_world = polylines[pid][polylines[pid].len() - 2];
+                        let tan0 = math::unit(sub(p0_world, prev_world), basis[0]);
+                        let (uv1, w1) = branches[b_id].eval_at(join_s, join_s / step_pitch);
+                        let p1_world = to_world(uv1, w1, max_r2);
+                        let eps_s = (join_s + 0.02 * step_pitch).min(s_total);
+                        let (uv_e, w_e) = branches[b_id].eval_at(eps_s, eps_s / step_pitch);
+                        let p_eps = to_world(uv_e, w_e, max_r2);
+                        let chord = norm(sub(p1_world, p0_world));
+                        let m0 = mul(tan0, chord * 0.85);
+                        let m1 = mul(math::unit(sub(p_eps, p1_world), tan0), chord * 0.85);
+                        let steps = 12usize;
+                        let mut valid_arc = true;
+                        let mut arc = Vec::with_capacity(steps);
+                        for k in 1..=steps {
+                            let u = k as f64 / steps as f64;
+                            let u2 = u * u;
+                            let u3 = u2 * u;
+                            let pt = add(
+                                add(
+                                    mul(p0_world, 2.0 * u3 - 3.0 * u2 + 1.0),
+                                    mul(m0, u3 - 2.0 * u2 + u),
+                                ),
+                                add(mul(p1_world, -2.0 * u3 + 3.0 * u2), mul(m1, u3 - u2)),
+                            );
+                            let rel = sub(pt, center);
+                            if sample_trilinear(
+                                field,
+                                dot(basis[0], rel),
+                                dot(basis[1], rel),
+                                dot(basis[2], rel),
+                            ) < 0.32 * ISO
+                            {
+                                valid_arc = false;
+                                break;
+                            }
+                            arc.push(pt);
+                        }
+                        if valid_arc {
+                            for pt in arc {
+                                if polylines[pid]
+                                    .last()
+                                    .is_none_or(|&prev| norm(sub(pt, prev)) > 1e-6)
+                                {
+                                    polylines[pid].push(pt);
+                                }
+                            }
+                            start_s = join_s;
+                        }
+                    }
                 }
             }
-            polylines.push(split_pts);
-            (pid, 0.0)
+            pid
+        } else if let Some((graft_pt, graft_tan, _)) = split_graft {
+            let pid = polylines.len();
+            let join_s = (0.14 * step_pitch).min(0.45 * s_total);
+            let mut graft_pts = vec![graft_pt];
+            if join_s > 1e-5 {
+                let (uv1, w1) = branches[b_id].eval_at(join_s, join_s / step_pitch);
+                let p1_world = to_world(uv1, w1, max_r2);
+                let eps_s = (join_s + 0.02 * step_pitch).min(s_total);
+                let (uv_e, w_e) = branches[b_id].eval_at(eps_s, eps_s / step_pitch);
+                let p_eps = to_world(uv_e, w_e, max_r2);
+                let chord = norm(sub(p1_world, graft_pt));
+                let m0 = mul(graft_tan, chord * 0.85);
+                let m1 = mul(math::unit(sub(p_eps, p1_world), graft_tan), chord * 0.85);
+                let steps = 14usize;
+                let mut valid_arc = true;
+                let mut arc = Vec::with_capacity(steps);
+                for k in 1..=steps {
+                    let u = k as f64 / steps as f64;
+                    let u2 = u * u;
+                    let u3 = u2 * u;
+                    let pt = add(
+                        add(
+                            mul(graft_pt, 2.0 * u3 - 3.0 * u2 + 1.0),
+                            mul(m0, u3 - 2.0 * u2 + u),
+                        ),
+                        add(mul(p1_world, -2.0 * u3 + 3.0 * u2), mul(m1, u3 - u2)),
+                    );
+                    let rel = sub(pt, center);
+                    if sample_trilinear(
+                        field,
+                        dot(basis[0], rel),
+                        dot(basis[1], rel),
+                        dot(basis[2], rel),
+                    ) < 0.32 * ISO
+                    {
+                        valid_arc = false;
+                        break;
+                    }
+                    arc.push(pt);
+                }
+                if valid_arc {
+                    graft_pts.extend(arc);
+                    start_s = join_s;
+                } else {
+                    graft_pts.clear();
+                }
+            } else {
+                graft_pts.clear();
+            }
+            polylines.push(graft_pts);
+            pid
         } else {
             let pid = polylines.len();
             polylines.push(Vec::new());
-            (pid, 0.0)
+            pid
         };
 
-        // Trace the constant-step spiral along branch b_id.
-        let skip_first = !polylines[poly_idx].is_empty() && continuing_parent.is_none();
-        for step in 0..=n_steps {
-            if step == 0 && skip_first {
+        let rem_s = (s_total - start_s).max(0.0);
+        let rem_steps =
+            ((rem_s / ds_sample).ceil() as usize).max(if start_s > 0.0 { 1 } else { n_steps });
+        for step in 0..=rem_steps {
+            if step == 0 && start_s > 0.0 && !polylines[poly_idx].is_empty() {
                 continue;
             }
-            let s = s_total * (step as f64 / n_steps as f64);
-            let frac = phase0 + s / step_pitch;
+            let s = if rem_s > 0.0 {
+                start_s + rem_s * (step as f64 / rem_steps as f64)
+            } else {
+                s_total
+            };
+            let frac = s / step_pitch;
             let (uv, w) = branches[b_id].eval_at(s, frac);
             let pt = to_world(uv, w, max_r2);
             if polylines[poly_idx]
@@ -1568,14 +2000,16 @@ fn extract_spiral_surface(
             {
                 polylines[poly_idx].push(pt);
             }
-            if step == n_steps {
+            if step == rem_steps {
                 branch_end_uv[b_id] = uv;
-                branch_end_phase[b_id] = frac;
+                branch_end_w[b_id] = w;
             }
         }
         branch_poly[b_id] = Some(poly_idx);
 
-        // Connect all secondary merging peak spirals smoothly & tangentially onto b_id's shared spiral!
+        // Connect secondary merging peak spirals tangentially onto `b_id`'s shared spiral
+        // ONLY when `p_sec` actually meets `b_id`'s contour on the surface and `b_id` is long
+        // enough for the shared spiral to pass underneath `p_sec`.
         for &p_sec in &active_parents {
             if Some(p_sec) == continuing_parent {
                 continue;
@@ -1584,22 +2018,36 @@ fn extract_spiral_surface(
                 continue;
             };
             let sec_end_uv = branch_end_uv[p_sec];
-            let frac_sec = closest_frac_on_ring(&branches[b_id].rings[0], sec_end_uv);
-            // Target join on b_id's shared spiral: frac(s) = phase0 + s / step_pitch.
-            // Choose target_frac >= frac_sec + d_frac so s_target > 0 and Hermite S'(u) > 0 everywhere.
-            let d_frac = 0.32f64;
+            let sec_end_w = branch_end_w[p_sec];
+            let (_, _, near_b) =
+                closest_point_on_closed_poly(&nodes[first_node_id].raw, sec_end_uv);
+            if !valid_surface_bridge(
+                field,
+                sec_end_uv,
+                sec_end_w,
+                near_b,
+                nodes[first_node_id].w,
+                2.4 * h,
+                0.45 * ISO,
+            ) {
+                continue;
+            }
+            let frac_sec = closest_frac_on_ring(&branches[b_id].rings[0], near_b);
+            let d_frac = 0.28f64;
             let mut target_frac = frac_sec + d_frac;
-            if target_frac <= phase0 + 0.15 {
+            if target_frac <= 0.14 {
                 target_frac += 1.0;
             }
-            let mut s_target = (target_frac - phase0) * step_pitch;
-            if s_target > s_total && s_total > 1e-6 {
-                s_target = s_total;
-                target_frac = phase0 + s_total / step_pitch;
+            let s_target = target_frac * step_pitch;
+            if s_target > s_total || s_total <= 1e-6 {
+                continue;
             }
             let total_dfrac = (target_frac - frac_sec).max(0.08);
             let m_slope = (total_dfrac * step_pitch).min(s_target);
-            let blend_steps = 24usize;
+            let blend_steps = 28usize;
+            let mut blend_arc = Vec::with_capacity(blend_steps);
+            let mut prev_pt = *polylines[sec_poly_idx].last().unwrap();
+            let mut ok = true;
             for k in 1..=blend_steps {
                 let u = k as f64 / blend_steps as f64;
                 let u2 = u * u;
@@ -1610,20 +2058,36 @@ fn extract_spiral_surface(
                 let f = frac_sec + u * total_dfrac;
                 let (uv, w) = branches[b_id].eval_at(h_s.clamp(0.0, s_total), f);
                 let pt = to_world(uv, w, max_r2);
-                if polylines[sec_poly_idx]
-                    .last()
-                    .is_none_or(|&prev| norm(sub(pt, prev)) > 1e-6)
-                {
-                    polylines[sec_poly_idx].push(pt);
+                if norm(sub(pt, prev_pt)) > 2.2 * h {
+                    ok = false;
+                    break;
+                }
+                blend_arc.push(pt);
+                prev_pt = pt;
+            }
+            if ok {
+                for pt in blend_arc {
+                    if polylines[sec_poly_idx]
+                        .last()
+                        .is_none_or(|&prev| norm(sub(pt, prev)) > 1e-6)
+                    {
+                        polylines[sec_poly_idx].push(pt);
+                    }
                 }
             }
         }
     }
 
-    let open_tol = (simplify_tol * 0.18).min(0.012 * step_pitch).max(0.004);
+    let fairing_passes = if coarseness_norm < 0.75 { 3 } else { 1 };
+    let open_tol = (simplify_tol * 0.45).min(0.008 * step_pitch).max(0.0012);
+    let max_step = 2.6 * h;
     let polylines_3d: Vec<Vec<V3>> = polylines
         .into_iter()
-        .map(|poly| rdp_open_3d(&poly, open_tol))
+        .flat_map(|poly| split_discontinuous_polyline(poly, field, center, basis, max_step))
+        .map(|poly| {
+            let faired = smooth_open_polyline_3d(&poly, fairing_passes);
+            rdp_open_3d(&faired, open_tol)
+        })
         .filter(|poly| poly.len() >= 2)
         .collect();
 
@@ -1684,7 +2148,7 @@ pub(crate) fn prepare_slices(
     };
 
     let c = o.slice_coarseness as f64 / 100.0;
-    let simplify_tol = 0.02 + 0.88 * c * c;
+    let simplify_tol = 0.002 + 0.85 * c * c;
     let mut coarsened_any = false;
     let mut groups = Vec::with_capacity(by_color.len());
     let mut max_r2 = 0.0f64;
@@ -1742,6 +2206,7 @@ pub(crate) fn prepare_slices(
                     padded_low[2],
                     padded_high[2],
                     o.slice_count,
+                    c,
                     simplify_tol,
                     &mut max_r2,
                 ),
@@ -1756,6 +2221,7 @@ pub(crate) fn prepare_slices(
                     padded_high,
                     o.slice_count,
                     o.slice_hatch_angle,
+                    c,
                     simplify_tol,
                     &mut max_r2,
                 ),
@@ -1769,6 +2235,7 @@ pub(crate) fn prepare_slices(
                 padded_low[2],
                 padded_high[2],
                 o.slice_spiral_density,
+                c,
                 simplify_tol,
                 &mut max_r2,
             ),
@@ -1846,37 +2313,52 @@ fn outward_normals(pts: &[P2], area: f64) -> Vec<P2> {
         .collect()
 }
 
-fn open_normals(pts: &[P2]) -> Vec<P2> {
+fn open_normals_and_curvatures(pts: &[P2]) -> (Vec<P2>, Vec<f64>) {
     let n = pts.len();
     if n < 2 {
-        return vec![[0.0, 1.0]; n];
+        return (vec![[0.0, 1.0]; n], vec![0.0; n]);
     }
-    let edge_normals: Vec<P2> = (0..n - 1)
+    let mut tangents: Vec<P2> = (0..n)
         .map(|i| {
-            let d = sub(pts[i + 1], pts[i]);
-            let len = norm(d);
-            if len > 1e-12 {
-                [d[1] / len, -d[0] / len]
+            let d = if i == 0 {
+                sub(pts[1], pts[0])
+            } else if i == n - 1 {
+                sub(pts[n - 1], pts[n - 2])
             } else {
-                [0.0, 1.0]
-            }
+                sub(pts[i + 1], pts[i - 1])
+            };
+            math::unit(d, [1.0, 0.0])
         })
         .collect();
-    (0..n)
-        .map(|i| {
-            if i == 0 {
-                edge_normals[0]
-            } else if i == n - 1 {
-                edge_normals[n - 2]
-            } else {
-                let prev = edge_normals[i - 1];
-                let curr = edge_normals[i];
-                let bisector = math::unit(add(prev, curr), curr);
-                let proj = dot(bisector, curr).max(0.69);
-                mul(bisector, (1.0 / proj).clamp(1.0, 1.45))
+    if n >= 4 {
+        for _ in 0..2 {
+            let prev = tangents.clone();
+            for i in 1..n - 1 {
+                let blended = [
+                    0.25 * prev[i - 1][0] + 0.5 * prev[i][0] + 0.25 * prev[i + 1][0],
+                    0.25 * prev[i - 1][1] + 0.5 * prev[i][1] + 0.25 * prev[i + 1][1],
+                ];
+                tangents[i] = math::unit(blended, prev[i]);
             }
+        }
+    }
+    let normals: Vec<P2> = tangents.iter().map(|&t| [t[1], -t[0]]).collect();
+    let curvatures: Vec<f64> = (0..n)
+        .map(|i| {
+            if i == 0 || i == n - 1 {
+                return 0.0;
+            }
+            let ds = 0.5 * (norm(sub(pts[i], pts[i - 1])) + norm(sub(pts[i + 1], pts[i])));
+            if ds <= 1e-6 {
+                return 0.0;
+            }
+            let t0 = tangents[i - 1];
+            let t1 = tangents[i + 1];
+            let cross = t0[0] * t1[1] - t0[1] * t1[0];
+            -cross / (2.0 * ds)
         })
-        .collect()
+        .collect();
+    (normals, curvatures)
 }
 
 fn cyclic_runs(mask: &[bool]) -> Vec<(usize, usize)> {
@@ -2342,7 +2824,7 @@ pub(crate) fn build_weighted_slice_groups(
                 if n < 2 || path_length(&pts) < MIN_LENGTH_MM {
                     continue;
                 }
-                let normals = open_normals(&pts);
+                let (normals, curvatures) = open_normals_and_curvatures(&pts);
                 let u = depth_weights(path.zs, z_range[0], z_span, o.slice_depth_gamma, false);
 
                 emit_track_passes(&pts, &u, false, o.slice_max_passes, &mut weighted);
@@ -2352,7 +2834,9 @@ pub(crate) fn build_weighted_slice_groups(
                     let side = if track % 2 == 1 { -1.0 } else { 1.0 };
                     let signed_offset = side * pair as f64 * o.slice_parallel_spacing_mm;
                     let threshold = track as f64 / o.slice_max_parallel as f64 - 1e-9;
-                    let mask: Vec<bool> = u.iter().map(|&val| val >= threshold).collect();
+                    let mask: Vec<bool> = (0..n)
+                        .map(|i| u[i] >= threshold && signed_offset * curvatures[i] <= 0.65)
+                        .collect();
                     for (start, len) in linear_runs(&mask) {
                         let left_taper = start.min(3);
                         let right_taper = (n - (start + len)).min(3);

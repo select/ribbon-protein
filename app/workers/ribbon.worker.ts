@@ -11,7 +11,7 @@ interface RibbonWasm {
   default: (options?: { module_or_path: URL }) => Promise<unknown>;
   RenderSession: new (structure: string) => Session;
 }
-const WASM_SCHEMA = "slicer-patterns-v2";
+const WASM_SCHEMA = "slicer-patterns-v3";
 const booted = performance.now();
 let first = true;
 let wasm: Promise<RibbonWasm> | undefined;
