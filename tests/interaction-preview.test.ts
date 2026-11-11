@@ -257,9 +257,39 @@ describe("bounded display-only prepared 3D preview", () => {
     expect(hybrid.svg).toContain('stroke="black" stroke-opacity="0.35"');
     expect(hybrid.svg).toContain('stroke="#c4302b"');
 
+    const spiralScene: PreviewScene = {
+      ...sliceScene,
+      sliceGroups: [
+        {
+          color: "black",
+          loops: [],
+          polylines: [
+            [
+              [-3, -2, -3],
+              [3, 0, 0],
+              [-2, 3, 3],
+            ],
+          ],
+        },
+      ],
+    };
+    const spiralPreview = renderInteractionPreview(spiralScene, options);
+    validateSvg(spiralPreview.svg);
+    expect(spiralPreview.strokeCount).toBe(1);
+
     const fixedKey = previewGeometryKey(options);
     options.rotation = [50, 10, -5];
     expect(previewGeometryKey(options)).toBe(fixedKey);
+    options.sliceRotation = [25, -15, 0];
+    expect(previewGeometryKey(options)).not.toBe(fixedKey);
+    options.slicePattern = "crosshatch";
+    const hatchKey = previewGeometryKey(options);
+    options.sliceHatchAngle = 90;
+    expect(previewGeometryKey(options)).not.toBe(hatchKey);
+    options.slicePattern = "spiral";
+    const spiralKey = previewGeometryKey(options);
+    options.sliceSpiralDensity = 45;
+    expect(previewGeometryKey(options)).not.toBe(spiralKey);
     options.sliceAxis = "view";
     const viewKey = previewGeometryKey(options);
     options.rotation = [55, 10, -5];

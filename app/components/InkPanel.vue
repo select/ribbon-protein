@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject } from "vue";
+import type { SlicePattern } from "~/types/render";
 import type { Studio } from "../app.vue";
 import { hasSelectedMode, modeOf, moleculeGroups } from "../lib/molecule-groups";
 import DrawingGroup from "./DrawingGroup.vue";
@@ -36,6 +37,19 @@ const passOptions = [
   { value: 2, label: "2" },
   { value: 3, label: "3" },
 ];
+const patternOptions: { value: SlicePattern; label: string; title: string }[] = [
+  { value: "slices", label: "Slices", title: "Parallel section contours" },
+  {
+    value: "crosshatch",
+    label: "Cross-hatch",
+    title: "Two intersecting contour families with adjustable angle",
+  },
+  {
+    value: "spiral",
+    label: "Spiral",
+    title: "Continuous helical contour wrapping around the surface",
+  },
+];
 </script>
 
 <template>
@@ -56,14 +70,50 @@ const passOptions = [
 
     <template v-if="hasSlice">
       <DrawingGroup title="Surface slicing" default-open data-category="slice-surface">
-        <RangeField
-          v-model="studio.options.sliceCount"
-          label="Slices"
-          :min="2"
-          :max="120"
-          :step="1"
-          hint="Number of section planes cut through sliced components."
+        <SegmentedControl
+          v-model="studio.options.slicePattern"
+          legend="Surface pattern"
+          :options="patternOptions"
         />
+        <template v-if="studio.options.slicePattern === 'slices'">
+          <RangeField
+            v-model="studio.options.sliceCount"
+            label="Slices"
+            :min="2"
+            :max="120"
+            :step="1"
+            hint="Number of parallel section planes cut through sliced components."
+          />
+        </template>
+        <template v-else-if="studio.options.slicePattern === 'crosshatch'">
+          <RangeField
+            v-model="studio.options.sliceCount"
+            label="Slices per family"
+            :min="2"
+            :max="120"
+            :step="1"
+            hint="Section planes cut in each of the two crossing families."
+          />
+          <RangeField
+            v-model="studio.options.sliceHatchAngle"
+            label="Cross-hatch angle"
+            :min="15"
+            :max="165"
+            :step="1"
+            unit="°"
+            hint="Intersection angle between the two diagonal slice families."
+          />
+        </template>
+        <template v-else>
+          <RangeField
+            v-model="studio.options.sliceSpiralDensity"
+            label="Spiral density"
+            :min="2"
+            :max="120"
+            :step="1"
+            hint="Helical turns wrapped from pole to pole across the molecular envelope."
+          />
+        </template>
         <RangeField
           v-model="studio.options.sliceCoarseness"
           label="Coarseness"

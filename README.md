@@ -65,7 +65,7 @@ Guides belong to the preview and are **never exported**. The coaster export is a
 
 ### Slicer mode (pen-plotter surface contours)
 
-In **Slicer** mode, selected protein heavy atoms and non-protein molecules are combined into a 3D Gaussian surface envelope, smoothed by **Coarseness** and **Envelope probe**, and sectioned by marching squares along **X**, **Y**, **Z** or the live **View** axis.
+In **Slicer** mode, selected protein heavy atoms and non-protein molecules are combined into a 3D Gaussian surface envelope, smoothed by **Coarseness** and **Envelope probe**, and contoured along **X**, **Y**, **Z** or the live **View** axis with independent **Slice X/Y/Z** direction tilt. Choose **Slices** (parallel section planes), **Cross-hatch** (two intersecting contour families with **Cross-hatch angle** control), or **Spiral** (a continuous pole-to-pole helical contour with **Spiral density** control).
 
 Because physical pen plotters cannot fade strokes by opacity, 3D depth is generated entirely through geometry:
 

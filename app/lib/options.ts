@@ -51,7 +51,13 @@ export function validateOptions(o: RenderOptions, s: StructureData): void {
     throw new Error("Choose backbone or travel ordering.");
   if (!["x", "y", "z", "view"].includes(o.sliceAxis))
     throw new Error("Choose X, Y, Z or View slice axis.");
+  if (o.sliceRotation.length !== 3) throw new Error("Slice rotation requires three angles.");
+  o.sliceRotation.forEach((v) => range("Slice rotation (degrees)", v, -360000, 360000));
+  if (!["slices", "crosshatch", "spiral"].includes(o.slicePattern))
+    throw new Error("Choose slices, cross-hatch or spiral surface pattern.");
   range("Slice count", o.sliceCount, 2, 120, true);
+  range("Cross-hatch angle (degrees)", o.sliceHatchAngle, 5, 175);
+  range("Spiral density (turns)", o.sliceSpiralDensity, 1, 160);
   range("Slice coarseness", o.sliceCoarseness, 0, 100, true);
   range("Envelope probe (Å)", o.sliceProbeAngstrom, 0, 3.5);
   range("Max overdraw passes", o.sliceMaxPasses, 1, 8, true);

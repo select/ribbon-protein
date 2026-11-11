@@ -12,6 +12,7 @@ export interface BackboneSegment {
 }
 export type RenderMode = "ribbon" | "slice";
 export type SliceAxis = "x" | "y" | "z" | "view";
+export type SlicePattern = "slices" | "crosshatch" | "spiral";
 export type MoleculeCategory = "lipid" | "molecule" | "nucleic" | "water" | "ion";
 export interface MoleculeStyle {
   /** Real longitudinal tracks between two bond outlines. */
@@ -68,7 +69,11 @@ export interface RenderOptions {
   borderSpacingMm: number;
   strokeDirection: "backbone" | "travel";
   sliceAxis: SliceAxis;
+  sliceRotation: Vec3;
+  slicePattern: SlicePattern;
   sliceCount: number;
+  sliceHatchAngle: number;
+  sliceSpiralDensity: number;
   sliceCoarseness: number;
   sliceProbeAngstrom: number;
   sliceMaxPasses: number;
@@ -92,6 +97,7 @@ export interface PreviewMolecule extends Molecule {
 export interface PreviewSliceGroup {
   color: string;
   loops: Vec3[][];
+  polylines?: Vec3[][];
 }
 export interface PreviewScene {
   center: Vec3;
@@ -175,7 +181,11 @@ export function defaultRenderOptions(): RenderOptions {
     borderSpacingMm: 0.1,
     strokeDirection: "backbone",
     sliceAxis: "z",
+    sliceRotation: [0, 0, 0],
+    slicePattern: "slices",
     sliceCount: 28,
+    sliceHatchAngle: 60,
+    sliceSpiralDensity: 28,
     sliceCoarseness: 40,
     sliceProbeAngstrom: 1.4,
     sliceMaxPasses: 4,

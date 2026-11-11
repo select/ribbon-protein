@@ -265,6 +265,21 @@ describe.skipIf(!available)(
         const hybridScene = JSON.parse(session.preview_scene_json()) as PreviewScene;
         expect(hybridScene.molecules?.length).toBe(1);
         expect(hybridScene.sliceGroups?.length).toBe(1);
+
+        // Rotated slice direction + spiral surface pattern in hybrid mode.
+        options.sliceRotation = [22, -35, 10];
+        options.slicePattern = "spiral";
+        options.sliceSpiralDensity = 20;
+        const spiralHybrid = JSON.parse(
+          session.render_options_json(JSON.stringify(options), false),
+        );
+        validateSvg(spiralHybrid.result.svg);
+        expect(spiralHybrid.result).toEqual(
+          JSON.parse(renderJson(JSON.stringify({ structure, options }))),
+        );
+        const spiralScene = JSON.parse(session.preview_scene_json()) as PreviewScene;
+        expect(spiralScene.sliceGroups?.[0]?.polylines?.length ?? 0).toBeGreaterThan(0);
+        validateSvg(renderInteractionPreview(spiralScene, options).svg);
       } finally {
         session.free();
       }

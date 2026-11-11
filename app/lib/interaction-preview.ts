@@ -12,14 +12,22 @@ export function previewGeometryKey(options: RenderOptions): string {
   if (!sliceChains.length && !(unique.length === 0 && options.renderMode === "slice")) {
     return JSON.stringify([options.samples, ribbonChains]);
   }
+  const patternSpec =
+    options.slicePattern === "slices"
+      ? [options.sliceCount]
+      : options.slicePattern === "crosshatch"
+        ? [options.sliceCount, options.sliceHatchAngle]
+        : [options.sliceSpiralDensity];
   return JSON.stringify([
     "slice",
     ribbonChains.length ? options.samples : 0,
     ribbonChains,
     sliceChains.map((id) => [id, options.chainColors[id] ?? "black"]),
     options.sliceAxis,
+    options.sliceRotation,
     options.sliceAxis === "view" ? options.rotation : "fixed",
-    options.sliceCount,
+    options.slicePattern,
+    patternSpec,
     options.sliceCoarseness,
     options.sliceProbeAngstrom,
   ]);
@@ -68,26 +76,34 @@ export function renderInteractionPreview(scene: PreviewScene, o: RenderOptions):
   const invR = 1 / Math.max(scene.sliceRadius ?? 1, 1e-6);
   const FOC = 3.4;
 
+  const projectPoint = (pt: Vec3): P2 => {
+    const p = pt.map((v, i) => v - scene.center[i]!);
+    const x = dot(basis[0], p);
+    const y = -dot(basis[1], p);
+    const z = dot(basis[2], p);
+    const k = usePerspective ? FOC / Math.max(FOC - z * invR, 0.35) : 1;
+    const out: P2 = [x * k, y * k];
+    for (const j of [0, 1] as const) {
+      low[j] = Math.min(low[j], out[j]);
+      high[j] = Math.max(high[j], out[j]);
+    }
+    return out;
+  };
+
   const projectedSlices = sliceGroups.map((group) => ({
     color: group.color,
-    loops: group.loops.flatMap((loop) => {
-      if (loop.length < 3) return [];
-      const pts: P2[] = loop.map((pt) => {
-        const p = pt.map((v, i) => v - scene.center[i]!);
-        const x = dot(basis[0], p);
-        const y = -dot(basis[1], p);
-        const z = dot(basis[2], p);
-        const k = usePerspective ? FOC / Math.max(FOC - z * invR, 0.35) : 1;
-        const out: P2 = [x * k, y * k];
-        for (const j of [0, 1] as const) {
-          low[j] = Math.min(low[j], out[j]);
-          high[j] = Math.max(high[j], out[j]);
-        }
-        return out;
-      });
-      pts.push(pts[0]!);
-      return [pts];
-    }),
+    paths: [
+      ...group.loops.flatMap((loop) => {
+        if (loop.length < 3) return [];
+        const pts = loop.map(projectPoint);
+        pts.push(pts[0]!);
+        return [pts];
+      }),
+      ...(group.polylines ?? []).flatMap((poly) => {
+        if (poly.length < 2) return [];
+        return [poly.map(projectPoint)];
+      }),
+    ],
   }));
 
   const ribbons = scene.ribbons.map((ribbon) => {
@@ -181,7 +197,7 @@ export function renderInteractionPreview(scene: PreviewScene, o: RenderOptions):
   const opacity = Number(o.sliceInkOpacity.toFixed(3));
   const sliceSvgGroups = projectedSlices
     .map((group, idx) => {
-      const groupPaths = group.loops
+      const groupPaths = group.paths
         .map(fitPath)
         .filter((d): d is string => d !== null)
         .map((d) => `<path d="${d}"/>`)
