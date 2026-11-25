@@ -50,7 +50,7 @@ This selects the GitHub Pages preset and `/ribbon-protein/` base path, including
 
 ## Using the studio
 
-1. Choose or drop a `.cif`, `.mmcif`, `.pdb` or `.ent` file. **Load example** opens a small public crambin (1CRN) backbone bundled with the app, without contacting a molecular database.
+1. Choose or drop a `.cif`, `.mmcif`, `.pdb` or `.ent` file. **Load example** opens green fluorescent protein (GFP, PDB 1EMA) bundled with the app, without contacting a molecular database.
 2. Select protein chains and non-protein components in the collapsible **Components** tree, grouped by type (`Protein chains`, `Lipids`, `Other molecules`, `DNA/RNA / other polymers`, `Single atoms`, `Water`). Each parent group and individual component has a **Ribbon / Slicer** mode toggle and a circular color picker—so you can slice an entire complex or combine sliced protein envelopes with ribbon chains and covalent ligand bands in the same drawing. Water starts collapsed and hidden.
 3. Choose paper, orientation and margin:
    - **A4:** 210 × 297 mm.
@@ -102,7 +102,7 @@ For a larger example, download [6BAJ.cif from RCSB](https://files.rcsb.org/downl
 ```text
 app/                    Vue UI, local parser, worker and state lifecycle
 crates/ribbon-core/      Pure Rust renderer, WASM boundary and native tests
-public/examples/        Public crambin backbone demo, synthetic data and provenance
+public/examples/        Public GFP (1EMA) demo, crambin/synthetic fixtures and provenance
 public/templates/       Standalone preview-only coaster guide
 public/wasm/            Generated wasm-pack output (ignored)
 scripts/                WASM build, smoke check and fixture generation

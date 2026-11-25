@@ -1,8 +1,12 @@
 # Offline structure examples
 
-**Load example** uses `1crn-backbone.pdb`: a minimal first-model backbone from the
-public RCSB **1CRN** structure (crambin). `1crn-backbone.cif` contains the same
-physical coordinates with a deliberately multi-character author chain ID.
+**Load example** uses `1ema.pdb`: the public RCSB **1EMA** structure
+(green fluorescent protein from *Aequorea victoria*).
+
+`1crn-backbone.pdb` and `1crn-backbone.cif` are minimal first-model backbones
+from the public RCSB **1CRN** structure (crambin), kept as parser/DSSP test
+fixtures; `1crn-backbone.cif` contains the same physical coordinates with a
+deliberately multi-character author chain ID.
 Neither file contains HELIX/SHEET tags. Local hydrogen-bond DSSP recognizes both
 helices and a small beta sheet (H=22/E=4/C=20); no database request is needed.
 
